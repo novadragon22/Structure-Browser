@@ -229,7 +229,7 @@
     <p>Sign in with EVE SSO to pull your corp's structures, fuel and unanchor timers. Structure scopes only — read access, nothing else. The character must hold the <strong style="color:var(--gold)">Director</strong> role.</p>
     <button class="btn-gold" id="gateAuth"><span class="di diamond"></span> Authorize with EVE Online</button>
     <div class="gate-err" id="gateErr"></div>
-    <div class="gate-hint">This app is pre-configured — nothing to fill in. Your character and corp are read via EVE SSO with the <strong>read_structures</strong>, <strong>read_corporation_mining</strong> and <strong>read_corporation_assets</strong> scopes.</div>
+    <div class="gate-hint">This app is pre-configured — nothing to fill in. Your character and corp are read via EVE SSO with the <strong>read_structures</strong> and <strong>read_corporation_mining</strong> scopes.</div>
   </div>
   <div class="gate-skip"><a id="gateSkip">Continue without signing in →</a></div>
 </div>
@@ -307,16 +307,15 @@
       <h3>Connecting</h3>
       <p>This app connects only via live EVE SSO — the application Client ID and callback are embedded in the code, so there's nothing to configure. Click Authorize, pick your character, and approve the scopes below.</p>
       <h3>Scopes &amp; role</h3>
-      <ul><li><code>esi-corporations.read_structures.v1</code></li><li><code>esi-universe.read_structures.v1</code></li><li><code>esi-industry.read_corporation_mining.v1</code></li><li><code>esi-assets.read_corporation_assets.v1</code></li></ul>
+      <ul><li><code>esi-corporations.read_structures.v1</code></li><li><code>esi-universe.read_structures.v1</code></li><li><code>esi-industry.read_corporation_mining.v1</code></li></ul>
       <p>The authorizing character needs the <strong style="color:var(--gold)">Director</strong> role.</p>
       <h3>What's tracked</h3>
-      <p>Fuel blocks via ESI (expiry + asset quantities). Metenox drills are ignored unless they're unanchoring. Magmatic gas is hidden by CCP for running drills, so it's estimated from the last value and counts down live. Auto-syncs every 2 minutes.</p>
+      <p>Fuel block runway via ESI's fuel expiry timestamp on each structure. Metenox drills are ignored unless they're unanchoring. Magmatic gas isn't exposed by ESI, so it's set manually via Edit and counts down live at your configured rate. Auto-syncs every 2 minutes.</p>
     </div>
     <div class="modal-actions"><button class="btn gold" onclick="closeModal()">Close</button></div>
   </div>
 </div>
 
-<input type="file" id="importFile" accept="application/json" style="display:none">
 <div class="toast" id="toast"></div>
 
 <script>
@@ -334,9 +333,7 @@ const TYPES={
   other:{label:'Other structure',short:'OTHER',cls:'other',cat:'other',mining:false,fb:5,gas:0},
 };
 const ESI_TYPE={35825:'raitaru',35826:'azbel',35827:'sotiyo',35832:'astrahus',35833:'fortizar',35834:'keepstar',35835:'athanor',35836:'tatara',81826:'metenox'};
-const ESI_SCOPES=['esi-corporations.read_structures.v1','esi-universe.read_structures.v1','esi-industry.read_corporation_mining.v1','esi-assets.read_corporation_assets.v1'];
-const FUEL_BLOCK_TYPES=new Set([4051,4246,4247,4312]);
-const MAGMATIC_GAS_TYPE=81143;
+const ESI_SCOPES=['esi-corporations.read_structures.v1','esi-universe.read_structures.v1','esi-industry.read_corporation_mining.v1'];
 const SSO_AUTH='https://login.eveonline.com/v2/oauth/authorize/';
 const SSO_TOKEN='https://login.eveonline.com/v2/oauth/token';
 const ESI_BASE='https://esi.evetech.net/latest';
@@ -378,9 +375,8 @@ function countdown(ts){ const d=ts-now(); return d<=0?null:runwayText(d/3600000)
 function segBar(h,color){ const fill=h===Infinity?100:Math.max(0,Math.min(100,(h/HR_MONTH)*100)); const n=16,f=Math.round(fill/100*n); let s='';
   for(let i=0;i<n;i++) s+=`<div class="seg" style="background:${i<f?color:'#10161d'}"></div>`; return `<div class="segs">${s}</div>`; }
 function fuelMeter(s){ const h=fuelHoursLeft(s),lvl=level(h),col=levelColor(lvl);
-  const haveQty=s.fuelFromEsi&&(+s.fuel||0)>0;
-  const val=haveQty?(fmt(s.fuel)+' blk'):(s.fuelExpires?shortDate(s.fuelExpires):(fmt(s.fuel)+' blk'));
-  return `<div class="meter-block"><div class="meter-row"><span class="meter-label"><span class="ic">▮</span> Fuel blocks${s.fuelFromEsi?' · ESI':''}</span><span class="meter-val" style="color:${col}">${val}</span></div>
+  const val=s.fuelExpires?shortDate(s.fuelExpires):(fmt(s.fuel)+' blk');
+  return `<div class="meter-block"><div class="meter-row"><span class="meter-label"><span class="ic">▮</span> Fuel blocks${s.fuelExpires?' · ESI':''}</span><span class="meter-val" style="color:${col}">${val}</span></div>
     ${segBar(h,col)}<div class="runway lvl-${lvl}"><span>${fmt(s.fuelRate)}/hr</span><span>runway <b>${runwayText(h)}</b></span></div></div>`; }
 function gasMeter(s){
   if(s.gasUnknown) return `<div class="meter-block gas"><div class="meter-row"><span class="meter-label"><span class="ic">◆</span> Magmatic gas</span><span class="meter-val" style="color:var(--muted)">not in ESI — set it</span></div>
@@ -388,7 +384,7 @@ function gasMeter(s){
   const g=currentGas(s),h=hoursLeft(g,s.gasRate);
   const col=h<=48?'var(--red)':h<=HR_WEEK?'var(--gold)':'var(--gold-soft)';
   const lvl=h<=48?'critical':h<=HR_WEEK?'caution':'nominal';
-  return `<div class="meter-block gas"><div class="meter-row"><span class="meter-label"><span class="ic">◆</span> Magmatic gas${s.gasFromEsi?' · ESI':' · est.'}</span><span class="meter-val" style="color:${col}">${fmt(g)}</span></div>
+  return `<div class="meter-block gas"><div class="meter-row"><span class="meter-label"><span class="ic">◆</span> Magmatic gas · est.</span><span class="meter-val" style="color:${col}">${fmt(g)}</span></div>
     ${segBar(h,col)}<div class="runway lvl-${lvl}"><span>${fmt(s.gasRate)}/hr</span><span>runway <b>${runwayText(h)}</b></span></div></div>`; }
 
 function card(s){
@@ -510,10 +506,6 @@ function syncTypeFields(){ const t=TYPES[typeSel.value];
   document.getElementById('extractRow').classList.toggle('hide',t.cat!=='refinery'); }
 typeSel.addEventListener('change',()=>{ const t=TYPES[typeSel.value];
   document.getElementById('fFuelRate').value=t.fb; document.getElementById('fGasRate').value=t.gas||''; syncTypeFields(); });
-function openAdd(){ editingId=null; document.getElementById('mTitle').textContent='Add structure'; document.getElementById('mSub').textContent='Manual entry';
-  typeSel.value='athanor'; ['fName','fLoc','fFuel','fGas'].forEach(id=>document.getElementById(id).value='');
-  document.getElementById('fFuelRate').value=TYPES.athanor.fb; document.getElementById('fGasRate').value=''; document.getElementById('fExtract').value='';
-  syncTypeFields(); openModal('struct'); }
 window.openEdit=function(id){ const s=structures.find(x=>x.id===id); if(!s)return; editingId=id;
   document.getElementById('mTitle').textContent='Edit structure'; document.getElementById('mSub').textContent=s.name||'';
   typeSel.value=s.type; document.getElementById('fName').value=s.name||''; document.getElementById('fLoc').value=s.loc||'';
@@ -527,12 +519,12 @@ document.getElementById('saveBtn').onclick=async()=>{
   const gas=type==='metenox'?(+document.getElementById('fGas').value||0):0, gasRate=type==='metenox'?(+document.getElementById('fGasRate').value||0):0;
   const ext=(t.cat==='refinery'&&document.getElementById('fExtract').value)?new Date(document.getElementById('fExtract').value).toISOString():null;
   if(editingId){ const o=structures.find(x=>x.id===editingId); o.type=type;o.name=name;o.fuelRate=fuelRate;o.gasRate=gasRate;
-    if(type==='metenox'){ o.gas=gas;o.gasAsOf=new Date().toISOString();o.gasUnknown=false;o.gasFromEsi=false; }
-    if(!o.esiId){ o.loc=document.getElementById('fLoc').value.trim();o.system=o.loc;o.fuel=fuel;o.fuelExpires=null;o.fuelFromEsi=false;o.extractionEnd=ext; }
+    if(type==='metenox'){ o.gas=gas;o.gasAsOf=new Date().toISOString();o.gasUnknown=false; }
+    if(!o.esiId){ o.loc=document.getElementById('fLoc').value.trim();o.system=o.loc;o.fuel=fuel;o.fuelExpires=null;o.extractionEnd=ext; }
     else if(ext){ o.extractionEnd=ext; }
   } else { const loc=document.getElementById('fLoc').value.trim();
     structures.push({id:'s'+Date.now()+Math.random().toString(36).slice(2,6),type,name,loc,system:loc,constellation:'Unknown',
-      fuel,fuelRate,fuelExpires:null,fuelFromEsi:false,gas,gasRate,gasAsOf:new Date().toISOString(),gasUnknown:false,gasFromEsi:false,extractionEnd:ext}); }
+      fuel,fuelRate,fuelExpires:null,gas,gasRate,gasAsOf:new Date().toISOString(),gasUnknown:false,extractionEnd:ext}); }
   closeModal(); await save();
 };
 
@@ -547,9 +539,6 @@ function renderTopbar(){
   } else {
     html+=`<button class="tb-btn" onclick="showGate()">Connect ESI</button>`;
   }
-  html+=`<button class="tb-btn" onclick="openAdd()">+ Add</button>`;
-  html+=`<button class="tb-btn" onclick="exportData()">Export</button>`;
-  html+=`<button class="tb-btn" onclick="document.getElementById('importFile').click()">Import</button>`;
   html+=`<button class="tb-btn" onclick="openModal('help')">? Help</button>`;
   r.innerHTML=html;
 }
@@ -574,11 +563,6 @@ async function sha256(s){ return await crypto.subtle.digest('SHA-256',new TextEn
 function randStr(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); return b64url(a.buffer); }
 function jwtPayload(t){ return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
 async function esiGet(path,token){ const r=await fetch(ESI_BASE+path,{headers:token?{Authorization:'Bearer '+token}:{}}); if(!r.ok) throw new Error('ESI '+r.status); return r.json(); }
-async function esiGetPaged(path,token,cap){ const sep=path.includes('?')?'&':'?';
-  const f=await fetch(ESI_BASE+path+sep+'page=1',{headers:{Authorization:'Bearer '+token}}); if(!f.ok) throw new Error('ESI '+f.status);
-  let out=await f.json(); const pages=Math.min(parseInt(f.headers.get('X-Pages')||'1',10),cap||20);
-  for(let p=2;p<=pages;p++){ try{ const r=await fetch(ESI_BASE+path+sep+'page='+p,{headers:{Authorization:'Bearer '+token}}); if(r.ok) out=out.concat(await r.json()); }catch(e){} }
-  return out; }
 async function postToken(body){ const r=await fetch(SSO_TOKEN,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
   if(!r.ok){ let d=''; try{ d=' '+(await r.text()).slice(0,120); }catch(e){} throw new Error('HTTP '+r.status+d); } return r.json(); }
 function storeFromToken(tok){ const p=jwtPayload(tok.access_token);
@@ -625,11 +609,6 @@ async function importFromEsi(token,silent){
   const list=await esiGet('/corporations/'+corpId+'/structures/',token);
   let extractions=[]; try{ extractions=await esiGet('/corporation/'+corpId+'/mining/extractions/',token); }catch(e){}
   const exMap={}; extractions.forEach(x=>{ exMap[x.structure_id]=x.chunk_arrival_time; });
-  const fuelMap={},gasMap={}; let assetsScopeMissing=false;
-  try{ const assets=await esiGetPaged('/corporations/'+corpId+'/assets/',token,30);
-    assets.forEach(a=>{ if(a.location_flag!=='StructureFuel') return; const sid=a.location_id,q=a.quantity||0;
-      if(FUEL_BLOCK_TYPES.has(a.type_id)) fuelMap[sid]=(fuelMap[sid]||0)+q; else if(a.type_id===MAGMATIC_GAS_TYPE) gasMap[sid]=(gasMap[sid]||0)+q; });
-  }catch(e){ if(/\b403\b/.test(e.message)) assetsScopeMissing=true; }
   const sysCache={},constCache={}; let added=0,updated=0; const seen=new Set();
   for(const st of list){
     const typeKey=ESI_TYPE[st.type_id]||'other';
@@ -644,31 +623,21 @@ async function importFromEsi(token,silent){
     o.system=sysName||('System '+st.system_id); o.constellation=constName||'Unknown'; o.loc=o.system;
     o.fuelExpires=st.fuel_expires||null; o.unanchorsAt=st.unanchors_at||null; o.state=st.state||null;
     if(o.fuelRate==null) o.fuelRate=TYPES[typeKey].fb;
+    if(o.fuel==null) o.fuel=0;
     if(TYPES[typeKey].cat==='refinery'&&exMap[st.structure_id]) o.extractionEnd=exMap[st.structure_id];
-    if(fuelMap[st.structure_id]!=null){ o.fuel=fuelMap[st.structure_id]; o.fuelFromEsi=true; } else o.fuelFromEsi=false;
     if(typeKey==='metenox'){ if(o.gasRate==null) o.gasRate=TYPES.metenox.gas;
-      if(gasMap[st.structure_id]!=null){ o.gas=gasMap[st.structure_id]; o.gasAsOf=new Date().toISOString(); o.gasUnknown=false; o.gasFromEsi=true; }
-      else { o.gasFromEsi=false; if(o.gas==null) o.gas=0; if(o.gasUnknown==null) o.gasUnknown=true; } }
-    if(ex) updated++; else { if(o.fuel==null) o.fuel=0; structures.push(o); added++; }
+      if(o.gas==null) o.gas=0; if(o.gasUnknown==null) o.gasUnknown=true; }
+    if(ex) updated++; else { structures.push(o); added++; }
   }
   const before=structures.length; structures=structures.filter(s=>!s.esiId||seen.has(s.esiId)); const removed=before-structures.length;
   await save(); setSyncDot('ok');
   if(silent) return;
-  let tail=assetsScopeMissing?'Re-authorize to grant asset access for live fuel quantities.':'Fuel read live from ESI. Metenox tracked only while unanchoring.';
-  toast('Synced '+added+' new, updated '+updated+(removed?', removed '+removed:'')+'. '+tail);
+  toast('Synced '+added+' new, updated '+updated+(removed?', removed '+removed:'')+'. Fuel runway from ESI expiry. Metenox tracked only while unanchoring.');
 }
 async function syncNow(){ const b=document.getElementById('syncBtn'); if(b){b.disabled=true;b.textContent='Syncing…';}
   try{ const v=await getValidToken(); if(!v){ gateErr&&0; toast('Session expired — reconnect.'); showGate(); } else await importFromEsi(v.access); }
   catch(e){ toast('Sync failed: '+e.message); } finally{ if(b){b.disabled=false;b.textContent='Sync';} } }
-window.syncNow=syncNow; window.openAdd=openAdd; window.showGate=showGate; window.openModal=openModal;
-
-/* ---------- backup ---------- */
-function exportData(){ const blob=new Blob([JSON.stringify({structures,exported:new Date().toISOString()},null,2)],{type:'application/json'});
-  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='structure-ops-backup.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Backup downloaded.'); }
-window.exportData=exportData;
-document.getElementById('importFile').onchange=e=>{ const f=e.target.files[0]; if(!f)return; const rd=new FileReader();
-  rd.onload=async()=>{ try{ const d=JSON.parse(rd.result); if(!confirm('Replace current structures with this backup?'))return; structures=d.structures||[]; bypass=true; await save(); updateAuthView(); toast('Backup restored.'); }catch(err){ toast('Could not read that file.'); } };
-  rd.readAsText(f); e.target.value=''; };
+window.syncNow=syncNow; window.showGate=showGate; window.openModal=openModal;
 
 /* ---------- toast ---------- */
 let toastT; function toast(m){ const e=document.getElementById('toast'); e.textContent=m; e.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>e.classList.remove('show'),5000); }
@@ -678,10 +647,10 @@ setInterval(()=>{ if(structures.some(s=>s.extractionEnd||s.unanchorsAt||s.fuelEx
 let _syncing=false;
 async function backgroundSync(){ if(_syncing) return; if(document.visibilityState&&document.visibilityState!=='visible') return; if(!session) return;
   _syncing=true; try{ const v=await getValidToken(); if(v) await importFromEsi(v.access,true); }catch(e){} finally{ _syncing=false; } }
-setInterval(backgroundSync,120000); // live ESI update every 2 minutes
+setInterval(backgroundSync,30000); // live ESI update every 30 seconds
 
 (async function init(){
-  document.getElementById('footer').textContent='Fuel & gas from ESI assets where exposed; running-Metenox gas is hidden by CCP, so it\u2019s estimated and counts down live. Metenox ignored unless unanchoring. Auto-syncs every 2 minutes.';
+  document.getElementById('footer').textContent='';
   structures=(await sGet(STORE_KEY))||[];
   fuelCollapse=(await sGet(COLLAPSE_KEY))||{moon:false,all:false};
   session=(await sGet(TOKEN_KEY))||null;
