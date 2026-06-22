@@ -241,6 +241,13 @@
   .field input,.field select{width:100%;background:rgba(10,14,20,.8);border:1px solid var(--line2);color:var(--text);font-family:var(--mono);font-size:12.5px;padding:9px 11px}
   .field input:focus,.field select:focus{border-color:var(--gold);box-shadow:0 0 8px rgba(201,168,104,.2)}
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .svc-toggles{display:flex;flex-wrap:wrap;gap:8px}
+  .svc-chip{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border:1px solid var(--line2);background:rgba(10,14,20,.6);cursor:pointer;font-family:var(--mono);font-size:11px;color:var(--text2);transition:all .12s}
+  .svc-chip:hover{border-color:var(--gold-dim)}
+  .svc-chip.on{border-color:var(--gold);color:var(--gold-bright);background:rgba(201,168,104,.12)}
+  .svc-chip input{accent-color:var(--gold);margin:0}
+  .svc-chip .r{color:var(--muted);font-size:9.5px}
+  .svc-note{font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:8px;line-height:1.5}
   .modal-actions{display:flex;gap:10px;margin-top:20px;justify-content:flex-end;flex-wrap:wrap}
   .hide{display:none!important}
   .help-body h3{font-family:var(--mono);font-size:11px;color:var(--cyan);letter-spacing:.08em;text-transform:uppercase;margin:14px 0 6px}
@@ -374,8 +381,9 @@
     </div>
     <div class="row2">
       <div class="field"><label for="fFuel">Fuel blocks held</label><input id="fFuel" type="number" min="0" placeholder="0"></div>
-      <div class="field"><label for="fFuelRate">Fuel blocks / hr</label><input id="fFuelRate" type="number" min="0" step="0.1"></div>
+      <div class="field"><label>Combined rate (computed)</label><div class="ro" id="rateReadout">—</div></div>
     </div>
+    <div class="field" id="svcRow"><label>Services online — Dogma base × hull bonus</label><div id="svcToggles" class="svc-toggles"></div><div class="svc-note" id="svcNote"></div></div>
     <div class="row2" id="gasRow">
       <div class="field"><label for="fGas">Magmatic gas held</label><input id="fGas" type="number" min="0" placeholder="0"></div>
       <div class="field"><label for="fGasRate">Magmatic gas / hr</label><input id="fGasRate" type="number" min="0" step="0.1"></div>
@@ -417,6 +425,47 @@ const TYPES={
   other:{label:'Other structure',short:'OTHER',cls:'other',cat:'other',mining:false,fb:5,gas:0},
 };
 const ESI_TYPE={35825:'raitaru',35826:'azbel',35827:'sotiyo',35832:'astrahus',35833:'fortizar',35834:'keepstar',35835:'athanor',35836:'tatara',81826:'metenox'};
+
+/* ===== FUEL MODEL (Dogma attr 2109 base rates + hull role multipliers) ===== */
+// Base service consumption in fuel blocks/hour, grouped by the hull role that discounts them.
+const SERVICES={
+  moondrill:   {label:'Moon Drilling',          base:5,  group:'refinery'},
+  reprocessing:{label:'Reprocessing',           base:10, group:'refinery'},
+  biochem:     {label:'Biochemical Reactor',    base:10, group:'refinery'},
+  composite:   {label:'Composite Reactor',      base:10, group:'refinery'},
+  hybrid:      {label:'Hybrid Reactor',         base:10, group:'refinery'},
+  manufacturing:{label:'Manufacturing',         base:10, group:'engineering'},
+  research:    {label:'Research / Invention',   base:10, group:'engineering'},
+  clonebay:    {label:'Clone Bay',              base:10, group:'citadel'},
+  market:      {label:'Market',                 base:10, group:'citadel'},
+  bureau:      {label:'Bureau / Office',        base:10, group:'citadel'},
+};
+// Hull role bonus: multiplier applied to its native service group. Flex hulls use a fixed rate.
+const HULLS={
+  athanor: {mult:0.80, groups:['refinery']},
+  tatara:  {mult:0.75, groups:['refinery']},
+  raitaru: {mult:0.75, groups:['engineering']},
+  azbel:   {mult:0.75, groups:['engineering']},
+  sotiyo:  {mult:0.75, groups:['engineering']},
+  astrahus:{mult:0.75, groups:['citadel']},
+  fortizar:{mult:0.75, groups:['citadel']},
+  keepstar:{mult:0.75, groups:['citadel']},
+  metenox: {flex:true, fixed:5},   // fixed consumption, no service toggles
+};
+// Services a hull can host (its native discounted group), used to build the planning toggles.
+function applicableServices(type){ const h=HULLS[type]; if(!h||h.flex) return [];
+  const groups=h.groups||[]; return Object.keys(SERVICES).filter(k=>groups.includes(SERVICES[k].group)); }
+// Modified hourly rate of one online service on a given hull — kept as a float (no rounding).
+function serviceRate(key,type){ const sv=SERVICES[key]; if(!sv) return 0; const h=HULLS[type];
+  const mult=(h && !h.flex && (h.groups||[]).includes(sv.group))?h.mult:1.0; return sv.base*mult; }
+// Total combined hourly rate: sum of online services' modified rates (float). Flex hulls return fixed.
+function combinedRate(s){ const h=HULLS[s.type];
+  if(h && h.flex) return h.fixed;
+  if(Array.isArray(s.services)) return s.services.reduce((sum,k)=>sum+serviceRate(k,s.type),0);
+  return TYPES[s.type]?TYPES[s.type].fb:0; } // unconfigured fallback: legacy hull total
+// One-time onlining penalty: 72h (3 days) of that module's modified hourly rate.
+function calculateOnliningCost(key,type){ return 72*serviceRate(key,type); }
+
 const ESI_SCOPES=['esi-corporations.read_structures.v1','esi-universe.read_structures.v1','esi-industry.read_corporation_mining.v1','esi-assets.read_corporation_assets.v1'];
 const FUEL_BLOCK_TYPES=new Set([4051,4246,4247,4312]); // Nitrogen/Hydrogen/Helium/Oxygen fuel blocks
 const MAGMATIC_GAS_TYPE=81143; // Magmatic Gas reagent
@@ -441,10 +490,11 @@ async function save(){ await sSet(STORE_KEY,structures); renderAll(); }
 /* ---------- helpers ---------- */
 const now=()=>Date.now();
 const fmt=n=>(n==null||isNaN(n))?'0':Math.round(n).toLocaleString();
+const fmtRate=n=>(n==null||isNaN(n))?'0':(Math.round(n*100)/100).toLocaleString(undefined,{maximumFractionDigits:2}); // float hourly rate, not rounded to int
 function shortDate(iso){ const d=new Date(iso); return d.toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function hoursLeft(q,r){ if(!r||r<=0) return Infinity; return (q||0)/r; }
-function fuelHoursLeft(s){ if(s.fuelExpires) return (new Date(s.fuelExpires).getTime()-now())/3600000; return hoursLeft(s.fuel,s.fuelRate); }
+function fuelHoursLeft(s){ if(s.fuelExpires) return (new Date(s.fuelExpires).getTime()-now())/3600000; return hoursLeft(s.fuel,combinedRate(s)); }
 function fuelOk(s){ return fuelHoursLeft(s)>0; }
 function currentGas(s){ if(s.gasUnknown) return null; const base=+s.gas||0; if(!s.gasAsOf) return base;
   const el=(now()-new Date(s.gasAsOf).getTime())/3600000; return Math.max(0, base-(+s.gasRate||0)*el); }
@@ -453,7 +503,7 @@ function statusOf(s){ if(s.unanchorsAt) return 'decommissioning'; const t=TYPES[
   if(s.type==='metenox'){ const g=currentGas(s); const run=(g==null)?true:g>0; return (run&&fuelOk(s))?'extracting':'idle'; }
   if(s.extractionEnd) return new Date(s.extractionEnd).getTime()>now()?'extracting':'ready'; return 'idle'; }
 function runwayText(h){ if(h===Infinity) return 'no draw'; if(h<=0) return 'DEPLETED';
-  const d=Math.floor(h/24),hr=Math.floor(h%24),m=Math.round((h-Math.floor(h))*60);
+  const d=Math.floor(h/24),hr=Math.floor(h%24),m=Math.floor((h-Math.floor(h))*60); // floor only — never overstate safety
   if(d>0) return d+'d '+hr+'h'; if(hr>0) return hr+'h '+m+'m'; return m+'m'; }
 function level(h){ if(h===Infinity) return 'nominal'; if(h<=48) return 'critical'; if(h<=HR_WEEK) return 'caution'; return 'nominal'; }
 function levelColor(l){ return l==='critical'?'var(--red)':l==='caution'?'var(--gold)':'var(--cyan)'; }
@@ -463,7 +513,7 @@ function segBar(h,color){ const fill=h===Infinity?100:Math.max(0,Math.min(100,(h
 function fuelMeter(s){ const h=fuelHoursLeft(s),lvl=level(h),col=levelColor(lvl);
   const val=s.fuelExpires?shortDate(s.fuelExpires):(fmt(s.fuel)+' blk');
   return `<div class="meter-block"><div class="meter-row"><span class="meter-label"><span class="ic">▮</span> Fuel blocks${s.fuelExpires?' · ESI':''}</span><span class="meter-val" style="color:${col}">${val}</span></div>
-    ${segBar(h,col)}<div class="runway lvl-${lvl}"><span>${fmt(s.fuelRate)}/hr</span><span>runway <b>${runwayText(h)}</b></span></div></div>`; }
+    ${segBar(h,col)}<div class="runway lvl-${lvl}"><span>${fmtRate(combinedRate(s))}/hr</span><span>runway <b>${runwayText(h)}</b></span></div></div>`; }
 function gasMeter(s){
   if(s.gasUnknown) return `<div class="meter-block gas"><div class="meter-row"><span class="meter-label"><span class="ic">◆</span> Magmatic gas</span><span class="meter-val" style="color:var(--muted)">not in ESI — set it</span></div>
     ${segBar(Infinity,'#23272a')}<div class="runway"><span>${fmt(s.gasRate)}/hr</span><span>edit to enter level</span></div></div>`;
@@ -521,7 +571,7 @@ function metenoxTable(list){
   <div class="tbl-wrap"><table>
     <thead><tr><th class="l">Metenox</th><th>Fuel blocks</th><th>Fuel left</th><th>Magmatic gas</th><th>Gas left</th><th>Gas draw</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td class="l">Total — ${list.length} drill${list.length!==1?'s':''}</td><td class="fb">${fmt(tfb)}/hr</td><td></td><td></td><td></td><td class="gas">${fmt(tg)}/hr</td><td></td></tr></tfoot>
+    <tfoot><tr><td class="l">Total — ${list.length} drill${list.length!==1?'s':''}</td><td class="fb">${fmtRate(tfb)}/hr</td><td></td><td></td><td></td><td class="gas">${fmtRate(tg)}/hr</td><td></td></tr></tfoot>
   </table></div>`;
 }
 function fuelTable(list,withGas){
@@ -541,12 +591,12 @@ function fuelTable(list,withGas){
         gc=`<td class="gas">${fmt(g)}</td><td class="gas">${fmt(g*HR_WEEK)}</td><td class="gas">${fmt(g*HR_MONTH)}</td>`; }
       else { gl=`<td class="dim">—</td>`; gc=`<td class="dim">—</td><td class="dim">—</td><td class="dim">—</td>`; } }
     return `<tr><td class="l"><div class="nm">${esc(s.name)||'Unnamed'}</div><div class="ty">${TYPES[s.type].short} · ${esc(s.system||s.loc)||'—'}</div></td>
-      <td class="fb">${held}</td><td class="${fCol}">${fLeft}</td><td class="fb">${fmt(fb)}</td><td class="fb">${fmt(fb*HR_WEEK)}</td><td class="fb">${fmt(fb*HR_MONTH)}</td>${gl}${gc}</tr>`;
+      <td class="fb">${held}</td><td class="${fCol}">${fLeft}</td><td class="fb">${fmtRate(fb)}</td><td class="fb">${fmt(fb*HR_WEEK)}</td><td class="fb">${fmt(fb*HR_MONTH)}</td>${gl}${gc}</tr>`;
   }).join('');
   const gh=withGas?`<th>Gas left</th><th>Gas/hr</th><th>Gas/wk</th><th>Gas/mo</th>`:'';
   const gf=withGas?`<td></td><td class="gas">${fmt(tg)}</td><td class="gas">${fmt(tg*HR_WEEK)}</td><td class="gas">${fmt(tg*HR_MONTH)}</td>`:'';
   return `<div class="tbl-wrap"><table><thead><tr><th class="l">Structure</th><th>Fuel blocks</th><th>Fuel left</th><th>Fuel/hr</th><th>Fuel/wk</th><th>Fuel/mo</th>${gh}</tr></thead>
-    <tbody>${rows}</tbody><tfoot><tr><td class="l">Total — ${list.length}</td><td class="fb">${fmt(tHeld)}</td><td></td><td class="fb">${fmt(tfb)}</td><td class="fb">${fmt(tfb*HR_WEEK)}</td><td class="fb">${fmt(tfb*HR_MONTH)}</td>${gf}</tr></tfoot></table></div>`;
+    <tbody>${rows}</tbody><tfoot><tr><td class="l">Total — ${list.length}</td><td class="fb">${fmt(tHeld)}</td><td></td><td class="fb">${fmtRate(tfb)}</td><td class="fb">${fmt(tfb*HR_WEEK)}</td><td class="fb">${fmt(tfb*HR_MONTH)}</td>${gf}</tr></tfoot></table></div>`;
 }
 
 /* ---------- filters ---------- */
@@ -568,7 +618,7 @@ function refreshFuelFilters(active){
 function renderFuelSummary(metenox,moon,all){ const a=[...metenox,...moon,...all];
   const tfb=a.reduce((x,s)=>x+(s.fuelRate||0),0), tg=metenox.reduce((x,s)=>x+(s.gasRate||0),0);
   document.getElementById('fuelSummary').innerHTML=`
-    <div class="ftile fb"><div class="l">Fuel blocks / month</div><div class="v">${fmt(tfb*HR_MONTH)}</div><div class="sub">${fmt(tfb)}/hr · ${fmt(tfb*HR_WEEK)}/wk</div></div>
+    <div class="ftile fb"><div class="l">Fuel blocks / month</div><div class="v">${fmt(tfb*HR_MONTH)}</div><div class="sub">${fmtRate(tfb)}/hr · ${fmt(tfb*HR_WEEK)}/wk</div></div>
     <div class="ftile gas"><div class="l">Magmatic gas / month</div><div class="v">${fmt(tg*HR_MONTH)}</div><div class="sub">${fmt(tg)}/hr · ${fmt(tg*HR_WEEK)}/wk · ${metenox.length} drill${metenox.length!==1?'s':''}</div></div>
     <div class="ftile"><div class="l">Structures shown</div><div class="v">${a.length}</div><div class="sub">${metenox.length} metenox · ${moon.length} refinery · ${all.length} support</div></div>`; }
 
@@ -711,28 +761,72 @@ const typeSel=document.getElementById('fType');
 Object.entries(TYPES).forEach(([k,v])=>{const o=document.createElement('option');o.value=k;o.textContent=v.label;typeSel.appendChild(o);});
 function syncTypeFields(){ const t=TYPES[typeSel.value];
   document.getElementById('gasRow').classList.toggle('hide',typeSel.value!=='metenox');
-  document.getElementById('extractRow').classList.toggle('hide',t.cat!=='refinery'); }
+  document.getElementById('extractRow').classList.toggle('hide',t.cat!=='refinery');
+  buildServiceToggles(typeSel.value); }
+let editOrigServices=[]; // services that were online when the modal opened (for onlining-penalty detection)
+function buildServiceToggles(type, selected){
+  const wrap=document.getElementById('svcToggles'), note=document.getElementById('svcNote'), row=document.getElementById('svcRow');
+  const apps=applicableServices(type); const hull=HULLS[type];
+  if(hull&&hull.flex){ row.classList.add('hide'); document.getElementById('rateReadout').textContent=fmtRate(hull.fixed)+' blk/hr (fixed)'; return; }
+  row.classList.remove('hide');
+  if(!apps.length){ wrap.innerHTML=''; note.textContent='No service modules modelled for this hull — using base rate '+fmtRate(combinedRate({type,services:undefined}))+' blk/hr.'; updateRateReadout(); return; }
+  const sel=selected||[];
+  wrap.innerHTML=apps.map(k=>{ const on=sel.includes(k); const r=serviceRate(k,type);
+    return `<label class="svc-chip ${on?'on':''}"><input type="checkbox" value="${k}" ${on?'checked':''}> ${SERVICES[k].label} <span class="r">${fmtRate(r)}/hr</span></label>`; }).join('');
+  wrap.querySelectorAll('input[type=checkbox]').forEach(cb=>cb.addEventListener('change',()=>{ cb.closest('.svc-chip').classList.toggle('on',cb.checked); updateRateReadout(); }));
+  note.innerHTML=`Hull bonus ×${hull?hull.mult:1} applied to ${hull?hull.groups.join(', '):'—'} modules. Onlining a module costs a one-time 72h of its rate.`;
+  updateRateReadout();
+}
+function selectedServices(){ return [...document.querySelectorAll('#svcToggles input[type=checkbox]:checked')].map(c=>c.value); }
+function modalServices(type){ const hull=HULLS[type]; if(hull&&hull.flex) return undefined;
+  if(!applicableServices(type).length) return undefined; // unmodelled hull → legacy fallback rate
+  return selectedServices(); }
+function updateRateReadout(){
+  const type=typeSel.value;
+  const svc=modalServices(type);
+  const rate=combinedRate({type,services:svc});
+  const fuel=+document.getElementById('fFuel').value||0;
+  let penalty=0; (svc||[]).forEach(k=>{ if(!editOrigServices.includes(k)) penalty+=calculateOnliningCost(k,type); });
+  const projFuel=Math.max(0,fuel-penalty);
+  const hrs=rate>0?projFuel/rate:Infinity;
+  let txt=fmtRate(rate)+' blk/hr · runway '+runwayText(hrs);
+  if(penalty>0) txt+=` · onlining −${fmt(penalty)} blk`;
+  document.getElementById('rateReadout').textContent=txt;
+}
 typeSel.addEventListener('change',()=>{ const t=TYPES[typeSel.value];
-  document.getElementById('fFuelRate').value=t.fb; document.getElementById('fGasRate').value=t.gas||''; syncTypeFields(); });
+  document.getElementById('fGasRate').value=t.gas||''; editOrigServices=[]; syncTypeFields(); });
+document.getElementById('fFuel').addEventListener('input',updateRateReadout);
 window.openEdit=function(id){ const s=structures.find(x=>x.id===id); if(!s)return; editingId=id;
   document.getElementById('mTitle').textContent='Edit structure'; document.getElementById('mSub').textContent=s.name||'';
   typeSel.value=s.type; document.getElementById('fName').value=s.name||''; document.getElementById('fLoc').value=s.loc||'';
   document.getElementById('fFuel').value=s.fuel??''; document.getElementById('fGas').value=s.gasUnknown?'':(currentGas(s)==null?'':Math.round(currentGas(s)));
-  document.getElementById('fFuelRate').value=s.fuelRate??TYPES[s.type].fb; document.getElementById('fGasRate').value=s.gasRate??TYPES[s.type].gas;
-  document.getElementById('fExtract').value=s.extractionEnd?toLocalInput(s.extractionEnd):''; syncTypeFields(); openModal('struct'); };
+  document.getElementById('fGasRate').value=s.gasRate??TYPES[s.type].gas;
+  document.getElementById('fExtract').value=s.extractionEnd?toLocalInput(s.extractionEnd):'';
+  editOrigServices=Array.isArray(s.services)?s.services.slice():[];
+  document.getElementById('gasRow').classList.toggle('hide',s.type!=='metenox');
+  document.getElementById('extractRow').classList.toggle('hide',TYPES[s.type].cat!=='refinery');
+  buildServiceToggles(s.type, editOrigServices);
+  openModal('struct'); };
 function toLocalInput(iso){ const d=new Date(iso); return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,16); }
 document.getElementById('saveBtn').onclick=async()=>{
-  const type=typeSel.value,t=TYPES[type]; const name=document.getElementById('fName').value.trim(); if(!name){document.getElementById('fName').focus();return;}
-  const fuel=+document.getElementById('fFuel').value||0, fuelRate=+document.getElementById('fFuelRate').value||0;
+  const type=typeSel.value,t=TYPES[type],hull=HULLS[type]; const name=document.getElementById('fName').value.trim(); if(!name){document.getElementById('fName').focus();return;}
+  const fuelInput=+document.getElementById('fFuel').value||0;
   const gas=type==='metenox'?(+document.getElementById('fGas').value||0):0, gasRate=type==='metenox'?(+document.getElementById('fGasRate').value||0):0;
   const ext=(t.cat==='refinery'&&document.getElementById('fExtract').value)?new Date(document.getElementById('fExtract').value).toISOString():null;
-  if(editingId){ const o=structures.find(x=>x.id===editingId); o.type=type;o.name=name;o.fuelRate=fuelRate;o.gasRate=gasRate;
+  const svc=modalServices(type);
+  // onlining penalty: one-time 72h of rate for each service switched on this edit, deducted from projected inventory
+  let penalty=0; if(svc) svc.forEach(k=>{ if(!editOrigServices.includes(k)) penalty+=calculateOnliningCost(k,type); });
+  const fuel=Math.max(0,fuelInput-penalty);
+  if(editingId){ const o=structures.find(x=>x.id===editingId); o.type=type;o.name=name;o.services=svc;o.gasRate=gasRate;
+    o.fuelRate=combinedRate(o);
     if(type==='metenox'){ o.gas=gas;o.gasAsOf=new Date().toISOString();o.gasUnknown=false; }
-    if(!o.esiId){ o.loc=document.getElementById('fLoc').value.trim();o.system=o.loc;o.fuel=fuel;o.fuelExpires=null;o.extractionEnd=ext; }
-    else if(ext){ o.extractionEnd=ext; }
+    if(!o.esiId){ o.loc=document.getElementById('fLoc').value.trim();o.system=o.loc;o.fuel=fuel;o.fuelExpires=(o.fuelRate>0?new Date(now()+(fuel/o.fuelRate)*3600000).toISOString():null);o.extractionEnd=ext; }
+    else { o.fuel=fuel; if(o.fuelRate>0) o.fuelExpires=new Date(now()+(fuel/o.fuelRate)*3600000).toISOString(); if(ext) o.extractionEnd=ext; }
   } else { const loc=document.getElementById('fLoc').value.trim();
-    structures.push({id:'s'+Date.now()+Math.random().toString(36).slice(2,6),type,name,loc,system:loc,constellation:'Unknown',
-      fuel,fuelRate,fuelExpires:null,gas,gasRate,gasAsOf:new Date().toISOString(),gasUnknown:false,extractionEnd:ext}); }
+    const o={id:'s'+Date.now()+Math.random().toString(36).slice(2,6),type,name,loc,system:loc,constellation:'Unknown',
+      services:svc,fuel,gas,gasRate,gasAsOf:new Date().toISOString(),gasUnknown:false,extractionEnd:ext};
+    o.fuelRate=combinedRate(o); o.fuelExpires=(o.fuelRate>0?new Date(now()+(fuel/o.fuelRate)*3600000).toISOString():null);
+    structures.push(o); }
   closeModal(); await save();
 };
 
@@ -874,10 +968,14 @@ async function importFromEsi(token,silent){
     o.esiId=st.structure_id; seen.add(st.structure_id); o.type=typeKey; o.name=nm||('Structure '+st.structure_id);
     o.system=sysName||('System '+st.system_id); o.constellation=constName||'Unknown'; o.loc=o.system;
     o.fuelExpires=st.fuel_expires||null; o.unanchorsAt=st.unanchors_at||null; o.state=st.state||null;
-    if(o.fuelRate==null) o.fuelRate=TYPES[typeKey].fb;
+    o.fuelRate=combinedRate(o); // Dogma base × hull multiplier, summed over online services (float)
     if(o.fuel==null) o.fuel=0;
     // fuel-bay block count from corp assets — refreshed on every sync (30s)
-    if(fuelMap[st.structure_id]!=null){ o.fuel=fuelMap[st.structure_id]; o.fuelFromEsi=true; } else o.fuelFromEsi=false;
+    if(fuelMap[st.structure_id]!=null){
+      o.fuel=fuelMap[st.structure_id]; o.fuelFromEsi=true;
+      // recompute expiry from blocks held ÷ combined hourly rate so runway matches fuel remaining app-wide
+      if(o.fuelRate>0) o.fuelExpires=new Date(now()+(o.fuel/o.fuelRate)*3600000).toISOString();
+    } else o.fuelFromEsi=false;
     if(TYPES[typeKey].cat==='refinery'&&exMap[st.structure_id]) o.extractionEnd=exMap[st.structure_id];
     if(typeKey==='metenox'){
       if(o.gasRate==null) o.gasRate=TYPES.metenox.gas;
