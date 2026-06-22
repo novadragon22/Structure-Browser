@@ -94,6 +94,41 @@
   .tab .cnt{font-family:var(--mono);font-size:10px;background:rgba(201,168,104,.08);border:1px solid rgba(201,168,104,.25);padding:1px 6px;color:var(--gold-dim)}
   .tab.on .cnt{color:var(--gold)}
 
+  /* subtabs nested inside a section (e.g. Extractions: Active / Optimised) */
+  .subtabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px;flex-wrap:wrap}
+  .subtab{font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;padding:8px 14px;cursor:pointer;color:var(--muted);background:transparent;border:none;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s}
+  .subtab:hover{color:var(--text)}
+  .subtab.on{color:var(--cyan);border-bottom-color:var(--cyan)}
+  .subpanel{display:none}
+  .subpanel.on{display:block}
+
+  /* extraction calendar */
+  .opt-lbl{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);white-space:nowrap}
+  .fuel-controls #optDuration,.fuel-controls #optWindow{width:64px}
+  .cal-strip{display:flex;gap:3px;overflow-x:auto;padding-bottom:4px}
+  .cal-tile{flex:0 0 auto;width:46px;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px;border:1px solid var(--line);background:var(--panel2)}
+  .cal-tile.today{border-color:var(--gold)}
+  .cal-tile.lo{border-color:var(--cyan-edge);background:rgba(122,184,200,.06)}
+  .cal-tile.hi{border-color:var(--gold-deep);background:rgba(201,168,104,.1)}
+  .cal-dow{font-family:var(--mono);font-size:8.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+  .cal-dom{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--text)}
+  .cal-count{font-family:var(--mono);font-size:9px;color:var(--gold);background:rgba(201,168,104,.12);border-radius:8px;padding:0 5px}
+  .cal-list{margin-top:12px;border:1px solid var(--line)}
+  .cal-day-row{display:flex;gap:14px;padding:9px 12px;border-bottom:1px solid var(--line);align-items:baseline;flex-wrap:wrap}
+  .cal-day-row:last-child{border-bottom:none}
+  .cal-day-date{font-family:var(--mono);font-size:11px;color:var(--gold);min-width:120px}
+  .cal-day-chips{display:flex;gap:6px;flex-wrap:wrap}
+  .cal-chip{font-family:var(--mono);font-size:10.5px;color:var(--text2);background:var(--panel2);border:1px solid var(--line2);padding:3px 8px}
+  .cal-chip i{color:var(--muted);font-style:normal}
+
+  /* plan form / list */
+  .plan-form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  .plan-form input{flex:1;min-width:160px;background:rgba(10,14,20,.8);border:1px solid var(--line2);color:var(--text);font-family:var(--mono);font-size:12px;padding:8px 10px}
+  .plan-form input:focus{border-color:var(--gold)}
+  .plan-row{display:flex;align-items:center;gap:12px;padding:8px 12px;border:1px solid var(--line);border-top:none;font-family:var(--mono);font-size:12px}
+  .plan-row:first-child{border-top:1px solid var(--line)}
+  .plan-row .dim{color:var(--muted2);margin-left:auto}
+
   main{flex:1;overflow:auto;padding:20px}
   .wrap{max-width:1200px;margin:0 auto}
   section.sec{display:none}
@@ -249,8 +284,40 @@
   <main>
     <div class="wrap">
       <section class="sec on" id="sec-extractions">
-        <div class="panel-title"><span class="di diamond"></span>Active extractions — mining now</div>
-        <div class="grid" id="extractGrid"></div>
+        <nav class="subtabs">
+          <button class="subtab on" data-sub="active">Active extractions</button>
+          <button class="subtab" data-sub="optimised">Optimised extraction</button>
+        </nav>
+
+        <div class="subpanel on" id="sub-active">
+          <div class="panel-title"><span class="di diamond"></span>Active extractions — mining now</div>
+          <div class="grid" id="extractGrid"></div>
+        </div>
+
+        <div class="subpanel" id="sub-optimised">
+          <div class="panel-title"><span class="di diamond"></span>Optimised extraction — calendar &amp; staggered scheduling</div>
+          <div class="fuel-controls">
+            <select id="optConst"><option value="all">All constellations</option></select>
+            <span class="opt-lbl">Extraction length</span><input id="optDuration" type="number" min="0.5" step="0.5" value="7"><span class="opt-lbl">days</span>
+            <span class="opt-lbl">Planning window</span><input id="optWindow" type="number" min="3" max="60" value="14"><span class="opt-lbl">days</span>
+          </div>
+
+          <div class="subhead all"><span class="di"></span>Extraction calendar <small>chunk arrivals read from ESI</small></div>
+          <div id="calendarWrap"></div>
+
+          <div class="subhead moon"><span class="di"></span>Plan new systems <small>queue systems, then generate a staggered start pattern</small></div>
+          <div class="plan-form">
+            <input id="planSystem" placeholder="System name" list="constDatalist" autocomplete="off">
+            <input id="planConst" placeholder="Constellation (optional)" list="constDatalist" autocomplete="off">
+            <button class="btn gold sm" id="addPlanBtn">+ Add to plan</button>
+          </div>
+          <datalist id="constDatalist"></datalist>
+          <div id="planList"></div>
+
+          <button class="btn-gold" id="genPatternBtn" style="margin-top:16px"><span class="di diamond"></span> Generate optimal pattern</button>
+          <div class="hint" style="margin-top:12px">Spreads new extraction start dates so chunk arrivals don't cluster on the same day — a load-balancing suggestion, not a guarantee. Extraction duration varies by moon; adjust the figure above to match yours.</div>
+          <div id="patternResult"></div>
+        </div>
       </section>
       <section class="sec" id="sec-idle">
         <div class="panel-title"><span class="di diamond"></span>Idle extractions — capacity going to waste</div>
@@ -387,7 +454,8 @@ function gasMeter(s){
   return `<div class="meter-block gas"><div class="meter-row"><span class="meter-label"><span class="ic">◆</span> Magmatic gas · est.</span><span class="meter-val" style="color:${col}">${fmt(g)}</span></div>
     ${segBar(h,col)}<div class="runway lvl-${lvl}"><span>${fmt(s.gasRate)}/hr</span><span>runway <b>${runwayText(h)}</b></span></div></div>`; }
 
-function card(s){
+function card(s,opts){
+  const showEdit=!opts||opts.showEdit!==false;
   const t=TYPES[s.type], st=statusOf(s);
   const stLabel={extracting:'Mining',ready:'Chunk ready',idle:'Idle',decommissioning:'Unanchoring',support:'Online'}[st];
   const pulse=(st==='extracting'||st==='decommissioning')?'pulse':'';
@@ -401,12 +469,13 @@ function card(s){
   else if(st==='idle'&&t.cat==='refinery') body+=`<div class="hint">No extraction scheduled. Start one to begin pulling a chunk.</div>`;
   if(st==='decommissioning'){ const cd=s.unanchorsAt?countdown(new Date(s.unanchorsAt).getTime()):null;
     body+=`<div class="hint red">${cd?'Unanchors in <b>'+cd+'</b>':'Unanchoring — no timer reported by ESI.'}</div>`; }
+  const actions=showEdit?`<div class="card-actions"><button class="btn sm" onclick="openEdit('${s.id}')">Edit</button></div>`:'';
   return `<div class="card"><div class="rail ${st}"></div>
     <div class="card-head"><div><div class="card-name">${esc(s.name)||'Unnamed'}</div>
       <div class="card-loc">${esc(s.loc)||'— no location —'}${s.esiId?'<span class="esi-tag">ESI</span>':''}</div></div>
       <span class="badge ${t.cls}">${t.short}</span></div>
     <div class="status-line ${st}"><span class="sdot ${pulse}"></span>${stLabel}</div>
-    ${body}<div class="card-actions"><button class="btn sm" onclick="openEdit('${s.id}')">Edit</button></div></div>`;
+    ${body}${actions}</div>`;
 }
 
 function fuelTable(list,withGas){
@@ -459,13 +528,14 @@ function renderAll(){
   const decom=structures.filter(s=>statusOf(s)==='decommissioning');
   const active=structures.filter(s=>statusOf(s)!=='decommissioning');
   const mining=active.filter(s=>TYPES[s.type].mining);
-  const extracting=mining.filter(s=>['extracting','ready'].includes(statusOf(s)));
+  const extracting=mining.filter(s=>['extracting','ready'].includes(statusOf(s)))
+    .sort((a,b)=>(a.extractionEnd?new Date(a.extractionEnd).getTime()-now():Infinity)-(b.extractionEnd?new Date(b.extractionEnd).getTime()-now():Infinity));
   const idle=mining.filter(s=>statusOf(s)==='idle');
   document.getElementById('cExtract').textContent=extracting.length;
   document.getElementById('cIdle').textContent=idle.length;
   document.getElementById('cFuel').textContent=active.length;
   document.getElementById('cDec').textContent=decom.length;
-  document.getElementById('extractGrid').innerHTML=extracting.length?extracting.map(card).join(''):emptyBox('Nothing is mining','Refineries with a scheduled extraction appear here.');
+  document.getElementById('extractGrid').innerHTML=extracting.length?extracting.map(s=>card(s,{showEdit:false})).join(''):emptyBox('Nothing is mining','Refineries with a scheduled extraction appear here.');
   document.getElementById('idleGrid').innerHTML=idle.length?idle.map(card).join(''):emptyBox('No idle drills','Idle refineries land here.');
   refreshFuelFilters(active);
   const filtered=applyFuelFilters(active);
@@ -476,9 +546,90 @@ function renderAll(){
   document.getElementById('moonFuel').innerHTML=fuelTable(moon,moon.some(s=>s.type==='metenox'));
   document.getElementById('allFuel').innerHTML=fuelTable(all,false);
   document.getElementById('decomGrid').innerHTML=decom.length?decom.map(card).join(''):emptyBox('Nothing unanchoring','Structures your corp is decommissioning appear here automatically from ESI, each with its unanchor countdown.');
+  refreshOptFilters(active); renderCalendar(); renderPlanList();
 }
 
-/* ---------- tabs ---------- */
+/* ---------- subtabs (Extractions: Active / Optimised) ---------- */
+document.querySelectorAll('.subtab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.subtab').forEach(x=>x.classList.remove('on')); t.classList.add('on');
+  document.querySelectorAll('.subpanel').forEach(p=>p.classList.remove('on'));
+  document.getElementById('sub-'+t.dataset.sub).classList.add('on'); }));
+
+/* ---------- optimised extraction: calendar + staggered scheduling ---------- */
+const PLAN_KEY='eve_extraction_plans_v1';
+let extractionPlans=[]; let optFilter={constellation:'all'};
+function dateKey(d){ const x=new Date(d); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); }
+function startOfDay(ts){ const d=new Date(ts); d.setHours(0,0,0,0); return d; }
+function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
+function dayLabel(d){ return d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'}); }
+function refineryArrivals(){ return structures.filter(s=>TYPES[s.type].cat==='refinery'&&s.extractionEnd)
+  .map(s=>({name:s.name,system:s.system||s.loc,constellation:s.constellation||'Unknown',date:new Date(s.extractionEnd)})); }
+function refreshOptFilters(active){
+  const sel=document.getElementById('optConst'); if(!sel) return;
+  const consts=[...new Set((active||[]).map(s=>s.constellation||'Unknown'))].filter(Boolean).sort();
+  if(optFilter.constellation!=='all'&&!consts.includes(optFilter.constellation)) optFilter.constellation='all';
+  sel.innerHTML='<option value="all">All constellations</option>'+consts.map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join(''); sel.value=optFilter.constellation;
+  const dl=document.getElementById('constDatalist'); if(dl) dl.innerHTML=consts.map(c=>`<option value="${esc(c)}">`).join('');
+}
+function renderCalendar(){
+  const wrap=document.getElementById('calendarWrap'); if(!wrap) return;
+  const windowDays=Math.max(3,Math.min(60,+document.getElementById('optWindow').value||14));
+  const arrivals=refineryArrivals().filter(a=>optFilter.constellation==='all'||a.constellation===optFilter.constellation);
+  const today=startOfDay(now()); const buckets={};
+  arrivals.forEach(a=>{ const k=dateKey(a.date); (buckets[k]=buckets[k]||[]).push(a); });
+  let strip='',list='';
+  for(let i=0;i<windowDays;i++){
+    const d=addDays(today,i),k=dateKey(d),items=buckets[k]||[];
+    const lvl=items.length===0?'':items.length<=2?'lo':'hi';
+    strip+=`<div class="cal-tile ${lvl}${i===0?' today':''}"><span class="cal-dow">${d.toLocaleDateString([],{weekday:'short'})}</span><span class="cal-dom">${d.getDate()}</span>${items.length?`<span class="cal-count">${items.length}</span>`:''}</div>`;
+    if(items.length) list+=`<div class="cal-day-row"><div class="cal-day-date">${dayLabel(d)}</div><div class="cal-day-chips">${items.map(a=>`<span class="cal-chip">${esc(a.name)} <i>${esc(a.system)}</i></span>`).join('')}</div></div>`;
+  }
+  wrap.innerHTML=`<div class="cal-strip">${strip}</div>${list?`<div class="cal-list">${list}</div>`:`<div class="empty" style="margin-top:10px"><p>No scheduled arrivals in this window${optFilter.constellation!=='all'?' for '+esc(optFilter.constellation):''}.</p></div>`}`;
+}
+async function savePlans(){ await sSet(PLAN_KEY,extractionPlans); renderPlanList(); }
+function renderPlanList(){
+  const wrap=document.getElementById('planList'); if(!wrap) return;
+  const list=extractionPlans.filter(p=>optFilter.constellation==='all'||(p.constellation||'Unknown')===optFilter.constellation);
+  wrap.innerHTML=list.length?list.map(p=>`<div class="plan-row"><span>${esc(p.system)}</span><span class="dim">${esc(p.constellation||'Unspecified')}</span><button class="char-x" onclick="removePlan('${p.id}')">✕</button></div>`).join('')
+    :`<div class="empty" style="padding:18px"><p>No systems queued for scheduling yet.</p></div>`;
+}
+window.removePlan=async(id)=>{ extractionPlans=extractionPlans.filter(p=>p.id!==id); await savePlans(); };
+document.getElementById('addPlanBtn').onclick=async()=>{
+  const sysEl=document.getElementById('planSystem'), cEl=document.getElementById('planConst');
+  const system=sysEl.value.trim(); if(!system){ sysEl.focus(); return; }
+  let constellation=cEl.value.trim();
+  if(!constellation){ const match=structures.find(s=>(s.system||'').toLowerCase()===system.toLowerCase()); if(match) constellation=match.constellation||''; }
+  extractionPlans.push({id:'p'+Date.now()+Math.random().toString(36).slice(2,6),system,constellation});
+  sysEl.value=''; cEl.value=''; await savePlans();
+};
+document.getElementById('optConst').addEventListener('change',e=>{ optFilter.constellation=e.target.value; renderCalendar(); renderPlanList(); });
+document.getElementById('optWindow').addEventListener('input',renderCalendar);
+document.getElementById('genPatternBtn').onclick=()=>{
+  const duration=Math.max(0.5,+document.getElementById('optDuration').value||7);
+  const windowDays=Math.max(3,Math.min(60,+document.getElementById('optWindow').value||14));
+  const today=startOfDay(now()); const dayCounts={};
+  refineryArrivals().filter(a=>optFilter.constellation==='all'||a.constellation===optFilter.constellation)
+    .forEach(a=>{ const k=dateKey(a.date); dayCounts[k]=(dayCounts[k]||0)+1; });
+  const plansToSchedule=extractionPlans.filter(p=>optFilter.constellation==='all'||(p.constellation||'Unknown')===optFilter.constellation);
+  const out=document.getElementById('patternResult');
+  if(!plansToSchedule.length){ out.innerHTML=`<div class="empty" style="margin-top:10px"><p>Add at least one system to the plan above first.</p></div>`; return; }
+  const results=plansToSchedule.map(p=>{
+    let best=null;
+    for(let offset=0;offset<=windowDays;offset++){
+      const startDate=addDays(today,offset), arrivalDate=addDays(startDate,Math.round(duration)), key=dateKey(arrivalDate);
+      const load=dayCounts[key]||0;
+      if(best===null||load<best.load) best={offset,startDate,arrivalDate,load,key};
+    }
+    dayCounts[best.key]=(dayCounts[best.key]||0)+1;
+    return {...p,...best};
+  });
+  results.sort((a,b)=>a.offset-b.offset);
+  out.innerHTML=`<div class="tbl-wrap" style="margin-top:14px"><table>
+    <thead><tr><th class="l">System</th><th class="l">Constellation</th><th>Suggested start</th><th>Resulting arrival</th><th>Day load</th></tr></thead>
+    <tbody>${results.map(r=>`<tr><td class="l"><div class="nm">${esc(r.system)}</div></td><td class="l dim">${esc(r.constellation||'Unspecified')}</td>
+      <td>${dayLabel(r.startDate)}</td><td>${dayLabel(r.arrivalDate)}</td><td class="${r.load<=1?'gr':r.load<=2?'am':'rd'}">${r.load+1} arriving</td></tr>`).join('')}</tbody>
+  </table></div>`;
+};
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on')); t.classList.add('on');
   const map={extractions:'sec-extractions',idle:'sec-idle',fuel:'sec-fuel',decom:'sec-decom'};
@@ -653,6 +804,7 @@ setInterval(backgroundSync,30000); // live ESI update every 30 seconds
   document.getElementById('footer').textContent='';
   structures=(await sGet(STORE_KEY))||[];
   fuelCollapse=(await sGet(COLLAPSE_KEY))||{moon:false,all:false};
+  extractionPlans=(await sGet(PLAN_KEY))||[];
   session=(await sGet(TOKEN_KEY))||null;
   applyCollapse(); renderAll(); updateAuthView();
   if(new URLSearchParams(location.search).get('code')){ await resumeEsi(); return; }
