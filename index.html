@@ -223,6 +223,7 @@
   tbody tr:hover{background:rgba(201,168,104,.03)}
   tbody td.fb{color:var(--cyan)} tbody td.gas{color:var(--gold-soft)} tbody td.dim{color:var(--muted2)}
   tbody td.rd{color:var(--red)} tbody td.am{color:var(--gold)} tbody td.gr{color:var(--green)}
+  .estt{color:var(--muted2);font-style:normal;font-size:9px;letter-spacing:.05em}
   tfoot td{padding:10px 12px;text-align:right;font-family:var(--mono);font-weight:600;border-top:1px solid var(--line2);background:var(--panel2)}
   tfoot td.l{text-align:left;letter-spacing:.08em;text-transform:uppercase;font-size:11px;color:var(--muted)}
   tfoot td.fb{color:var(--cyan)} tfoot td.gas{color:var(--gold-soft)}
@@ -259,7 +260,7 @@
   .pip-mirror .panel-title{font-size:11px;margin-bottom:10px}
   .pip-mirror .grid{grid-template-columns:1fr}
   .pip-mirror .subtabs,.pip-mirror .fuel-controls,.pip-mirror .plan-form,.pip-mirror .btn-gold,.pip-mirror datalist{display:none}
-  .pip-mirror .card-actions{display:none}
+  .pip-mirror .card-actions,.pip-mirror .btn{display:none}
 </style>
 </head>
 <body>
@@ -503,40 +504,49 @@ function metenoxTable(list){
     const fbr=s.fuelRate||0; tfb+=fbr; const gr=s.gasRate||0; tg+=gr;
     const fh=fuelHoursLeft(s); const fLeft=fh===Infinity?'—':runwayText(fh);
     const fCol=fh===Infinity?'dim':(fh<=48?'rd':fh<=HR_WEEK?'am':'gr');
-    const fuelQty=s.fuelFromEsi?fmt(s.fuel):'<span class="dim">— n/a —</span>';
+    let fuelQty;
+    if(s.fuelFromEsi) fuelQty=fmt(s.fuel);
+    else if(s.fuelExpires&&fbr>0&&fh!==Infinity) fuelQty=fmt(fh*fbr)+' <i class="estt">est</i>';
+    else fuelQty='<span class="dim">—</span>';
     const g=currentGas(s); const gh=gasHoursLeft(s);
-    const gasQty=s.gasUnknown?'<span class="dim">not in ESI</span>':(fmt(g)+(s.gasFromEsi?'':' <i style="color:var(--muted2);font-style:normal">est</i>'));
-    const gLeft=s.gasUnknown?'<span class="dim">—</span>':(gh===Infinity?'—':runwayText(gh));
-    const gCol=s.gasUnknown?'dim':(gh<=48?'rd':gh<=HR_WEEK?'am':'gas');
+    let gasQty,gLeft,gCol;
+    if(s.gasUnknown){ gasQty='<span class="dim">— set →</span>'; gLeft='<span class="dim">—</span>'; gCol='dim'; }
+    else { gasQty=fmt(g)+(s.gasFromEsi?'':' <i class="estt">est</i>'); gLeft=gh===Infinity?'—':runwayText(gh); gCol=gh<=48?'rd':gh<=HR_WEEK?'am':'gas'; }
     return `<tr><td class="l"><div class="nm">${esc(s.name)||'Unnamed'}</div><div class="ty">${esc(s.system||s.loc)||'—'} · ${esc(s.constellation||'—')}</div></td>
       <td class="fb">${fuelQty}</td><td class="${fCol}">${fLeft}</td>
-      <td class="gas">${gasQty}</td><td class="${gCol}">${gLeft}</td><td class="gas">${fmt(gr)}/hr</td></tr>`;
+      <td class="gas">${gasQty}</td><td class="${gCol}">${gLeft}</td><td class="gas">${fmt(gr)}/hr</td>
+      <td style="text-align:right"><button class="btn sm" onclick="openEdit('${s.id}')">Set gas</button></td></tr>`;
   }).join('');
-  return `<div class="tbl-wrap"><table>
-    <thead><tr><th class="l">Metenox</th><th>Fuel blocks</th><th>Fuel left</th><th>Magmatic gas</th><th>Gas left</th><th>Gas draw</th></tr></thead>
+  return `<div class="hint gas" style="margin-bottom:10px">ESI only publishes a drill's fuel-bay contents when it isn't actively running, so block and gas counts can read blank. <b>Fuel left</b> is always accurate (from the structure's fuel timer); the block count is estimated from it. Use <b>Set gas</b> to enter magmatic gas — it then counts down live at the draw rate.</div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th class="l">Metenox</th><th>Fuel blocks</th><th>Fuel left</th><th>Magmatic gas</th><th>Gas left</th><th>Gas draw</th><th></th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td class="l">Total — ${list.length} drill${list.length!==1?'s':''}</td><td class="fb">${fmt(tfb)}/hr</td><td></td><td></td><td></td><td class="gas">${fmt(tg)}/hr</td></tr></tfoot>
+    <tfoot><tr><td class="l">Total — ${list.length} drill${list.length!==1?'s':''}</td><td class="fb">${fmt(tfb)}/hr</td><td></td><td></td><td></td><td class="gas">${fmt(tg)}/hr</td><td></td></tr></tfoot>
   </table></div>`;
 }
 function fuelTable(list,withGas){
   if(!list.length) return `<div class="empty"><p>No structures match.</p></div>`;
-  let tfb=0,tg=0;
+  let tfb=0,tg=0,tHeld=0;
   const rows=list.map(s=>{
     const fb=s.fuelRate||0; tfb+=fb; const g=s.type==='metenox'?(s.gasRate||0):0; tg+=g;
     const fh=fuelHoursLeft(s); const fLeft=fh===Infinity?'—':runwayText(fh);
     const fCol=fh===Infinity?'dim':(fh<=48?'rd':fh<=HR_WEEK?'am':'gr');
+    let held;
+    if(s.fuelFromEsi){ held=fmt(s.fuel); tHeld+=(+s.fuel||0); }
+    else if(s.fuelExpires&&fb>0&&fh!==Infinity){ held=fmt(fh*fb)+' <i class="estt">est</i>'; tHeld+=fh*fb; }
+    else held='<span class="dim">—</span>';
     let gl='',gc='';
     if(withGas){ if(s.type==='metenox'){ const gh=gasHoursLeft(s); const gLeft=s.gasUnknown?'set':(gh===Infinity?'—':runwayText(gh));
         const gCol=s.gasUnknown?'dim':(gh<=48?'rd':gh<=HR_WEEK?'am':'gas'); gl=`<td class="${gCol}">${gLeft}</td>`;
         gc=`<td class="gas">${fmt(g)}</td><td class="gas">${fmt(g*HR_WEEK)}</td><td class="gas">${fmt(g*HR_MONTH)}</td>`; }
       else { gl=`<td class="dim">—</td>`; gc=`<td class="dim">—</td><td class="dim">—</td><td class="dim">—</td>`; } }
     return `<tr><td class="l"><div class="nm">${esc(s.name)||'Unnamed'}</div><div class="ty">${TYPES[s.type].short} · ${esc(s.system||s.loc)||'—'}</div></td>
-      <td class="${fCol}">${fLeft}</td><td class="fb">${fmt(fb)}</td><td class="fb">${fmt(fb*HR_WEEK)}</td><td class="fb">${fmt(fb*HR_MONTH)}</td>${gl}${gc}</tr>`;
+      <td class="fb">${held}</td><td class="${fCol}">${fLeft}</td><td class="fb">${fmt(fb)}</td><td class="fb">${fmt(fb*HR_WEEK)}</td><td class="fb">${fmt(fb*HR_MONTH)}</td>${gl}${gc}</tr>`;
   }).join('');
   const gh=withGas?`<th>Gas left</th><th>Gas/hr</th><th>Gas/wk</th><th>Gas/mo</th>`:'';
   const gf=withGas?`<td></td><td class="gas">${fmt(tg)}</td><td class="gas">${fmt(tg*HR_WEEK)}</td><td class="gas">${fmt(tg*HR_MONTH)}</td>`:'';
-  return `<div class="tbl-wrap"><table><thead><tr><th class="l">Structure</th><th>Fuel left</th><th>Fuel/hr</th><th>Fuel/wk</th><th>Fuel/mo</th>${gh}</tr></thead>
-    <tbody>${rows}</tbody><tfoot><tr><td class="l">Total — ${list.length}</td><td></td><td class="fb">${fmt(tfb)}</td><td class="fb">${fmt(tfb*HR_WEEK)}</td><td class="fb">${fmt(tfb*HR_MONTH)}</td>${gf}</tr></tfoot></table></div>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th class="l">Structure</th><th>Fuel blocks</th><th>Fuel left</th><th>Fuel/hr</th><th>Fuel/wk</th><th>Fuel/mo</th>${gh}</tr></thead>
+    <tbody>${rows}</tbody><tfoot><tr><td class="l">Total — ${list.length}</td><td class="fb">${fmt(tHeld)}</td><td></td><td class="fb">${fmt(tfb)}</td><td class="fb">${fmt(tfb*HR_WEEK)}</td><td class="fb">${fmt(tfb*HR_MONTH)}</td>${gf}</tr></tfoot></table></div>`;
 }
 
 /* ---------- filters ---------- */
@@ -866,11 +876,11 @@ async function importFromEsi(token,silent){
     o.fuelExpires=st.fuel_expires||null; o.unanchorsAt=st.unanchors_at||null; o.state=st.state||null;
     if(o.fuelRate==null) o.fuelRate=TYPES[typeKey].fb;
     if(o.fuel==null) o.fuel=0;
+    // fuel-bay block count from corp assets — refreshed on every sync (30s)
+    if(fuelMap[st.structure_id]!=null){ o.fuel=fuelMap[st.structure_id]; o.fuelFromEsi=true; } else o.fuelFromEsi=false;
     if(TYPES[typeKey].cat==='refinery'&&exMap[st.structure_id]) o.extractionEnd=exMap[st.structure_id];
     if(typeKey==='metenox'){
       if(o.gasRate==null) o.gasRate=TYPES.metenox.gas;
-      // fuel blocks from assets
-      if(fuelMap[st.structure_id]!=null){ o.fuel=fuelMap[st.structure_id]; o.fuelFromEsi=true; } else o.fuelFromEsi=false;
       // magmatic gas reagent from assets (esi-assets.read_corporation_assets.v1)
       if(gasMap[st.structure_id]!=null){ o.gas=gasMap[st.structure_id]; o.gasAsOf=new Date().toISOString(); o.gasUnknown=false; o.gasFromEsi=true; }
       else { o.gasFromEsi=false; if(o.gas==null) o.gas=0; if(o.gasUnknown==null) o.gasUnknown=true; }
@@ -880,7 +890,7 @@ async function importFromEsi(token,silent){
   const before=structures.length; structures=structures.filter(s=>!s.esiId||seen.has(s.esiId)); const removed=before-structures.length;
   await save(); setSyncDot('ok');
   if(silent) return;
-  const tail=assetsScopeMissing?'Re-authorize to grant asset access for Metenox fuel & magmatic gas.':'Metenox fuel & magmatic gas read from corp assets.';
+  const tail=assetsScopeMissing?'Re-authorize to grant asset access for fuel-bay contents.':'Fuel bays read from corp assets.';
   toast('Synced '+added+' new, updated '+updated+(removed?', removed '+removed:'')+'. '+tail);
 }
 async function syncNow(){ const b=document.getElementById('syncBtn'); if(b){b.disabled=true;b.textContent='Syncing…';}
@@ -892,7 +902,7 @@ window.syncNow=syncNow; window.showGate=showGate; window.openModal=openModal;
 let toastT; function toast(m){ const e=document.getElementById('toast'); e.textContent=m; e.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>e.classList.remove('show'),5000); }
 
 /* ---------- init ---------- */
-setInterval(()=>{ if(structures.some(s=>s.extractionEnd||s.unanchorsAt||s.fuelExpires||s.type==='metenox')) renderAll(); }, 60000);
+setInterval(()=>{ if(structures.some(s=>s.extractionEnd||s.unanchorsAt||s.fuelExpires||s.type==='metenox')) renderAll(); }, 30000);
 let _syncing=false;
 async function backgroundSync(){ if(_syncing) return; if(document.visibilityState&&document.visibilityState!=='visible') return; if(!session) return;
   _syncing=true; try{ const v=await getValidToken(); if(v) await importFromEsi(v.access,true); }catch(e){} finally{ _syncing=false; } }
