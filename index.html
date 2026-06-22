@@ -298,7 +298,7 @@
           <div class="panel-title"><span class="di diamond"></span>Optimised extraction — calendar &amp; staggered scheduling</div>
           <div class="fuel-controls">
             <select id="optConst"><option value="all">All constellations</option></select>
-            <span class="opt-lbl">Extraction length</span><input id="optDuration" type="number" min="0.5" step="0.5" value="7"><span class="opt-lbl">days</span>
+            <span class="opt-lbl">Days between extractions</span><input id="optDuration" type="number" min="0.5" step="0.5" value="7"><span class="opt-lbl">days</span>
             <span class="opt-lbl">Planning window</span><input id="optWindow" type="number" min="3" max="60" value="14"><span class="opt-lbl">days</span>
           </div>
 
@@ -312,10 +312,14 @@
             <button class="btn gold sm" id="addPlanBtn">+ Add to plan</button>
           </div>
           <datalist id="constDatalist"></datalist>
+          <div class="plan-form" style="margin-top:0">
+            <input id="optExclude" placeholder="Exclusion keywords — comma-separated, e.g. POS, staging, Athanor-3" autocomplete="off">
+          </div>
+          <div class="hint" style="margin-top:0;margin-bottom:10px">Any structure whose name (or system) contains one of these keywords is ignored — left out of the calendar and the generated pattern. Case-insensitive.</div>
           <div id="planList"></div>
 
           <button class="btn-gold" id="genPatternBtn" style="margin-top:16px"><span class="di diamond"></span> Generate optimal pattern</button>
-          <div class="hint" style="margin-top:12px">Spreads new extraction start dates so chunk arrivals don't cluster on the same day — a load-balancing suggestion, not a guarantee. Extraction duration varies by moon; adjust the figure above to match yours.</div>
+          <div class="hint" style="margin-top:12px">Every refinery in a system is scheduled before moving to the next system, and only once all systems are done does the cycle return to the first. Each successive start is spaced by the days-between-extractions figure above. Refineries are read from your synced structures per system.</div>
           <div id="patternResult"></div>
         </div>
       </section>
@@ -556,13 +560,16 @@ document.querySelectorAll('.subtab').forEach(t=>t.addEventListener('click',()=>{
   document.getElementById('sub-'+t.dataset.sub).classList.add('on'); }));
 
 /* ---------- optimised extraction: calendar + staggered scheduling ---------- */
-const PLAN_KEY='eve_extraction_plans_v1';
-let extractionPlans=[]; let optFilter={constellation:'all'};
+const PLAN_KEY='eve_extraction_plans_v1', EXCLUDE_KEY='eve_extraction_exclude_v1';
+let extractionPlans=[]; let optFilter={constellation:'all'}; let excludeKeywords=[];
+function parseExclude(str){ return (str||'').split(',').map(s=>s.trim().toLowerCase()).filter(Boolean); }
+function isExcluded(name,system){ if(!excludeKeywords.length) return false;
+  const hay=((name||'')+' '+(system||'')).toLowerCase(); return excludeKeywords.some(k=>hay.includes(k)); }
 function dateKey(d){ const x=new Date(d); return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0'); }
 function startOfDay(ts){ const d=new Date(ts); d.setHours(0,0,0,0); return d; }
 function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
 function dayLabel(d){ return d.toLocaleDateString([],{weekday:'short',month:'short',day:'numeric'}); }
-function refineryArrivals(){ return structures.filter(s=>TYPES[s.type].cat==='refinery'&&s.extractionEnd)
+function refineryArrivals(){ return structures.filter(s=>TYPES[s.type].cat==='refinery'&&s.extractionEnd&&!isExcluded(s.name,s.system||s.loc))
   .map(s=>({name:s.name,system:s.system||s.loc,constellation:s.constellation||'Unknown',date:new Date(s.extractionEnd)})); }
 function refreshOptFilters(active){
   const sel=document.getElementById('optConst'); if(!sel) return;
@@ -589,8 +596,9 @@ function renderCalendar(){
 async function savePlans(){ await sSet(PLAN_KEY,extractionPlans); renderPlanList(); }
 function renderPlanList(){
   const wrap=document.getElementById('planList'); if(!wrap) return;
-  const list=extractionPlans.filter(p=>optFilter.constellation==='all'||(p.constellation||'Unknown')===optFilter.constellation);
-  wrap.innerHTML=list.length?list.map(p=>`<div class="plan-row"><span>${esc(p.system)}</span><span class="dim">${esc(p.constellation||'Unspecified')}</span><button class="char-x" onclick="removePlan('${p.id}')">✕</button></div>`).join('')
+  const list=extractionPlans.filter(p=>(optFilter.constellation==='all'||(p.constellation||'Unknown')===optFilter.constellation));
+  wrap.innerHTML=list.length?list.map(p=>{ const ex=isExcluded(p.system,p.system);
+    return `<div class="plan-row" style="${ex?'opacity:.45':''}"><span>${esc(p.system)}${ex?' <i style="color:var(--red);font-style:normal">excluded</i>':''}</span><span class="dim">${esc(p.constellation||'Unspecified')}</span><button class="char-x" onclick="removePlan('${p.id}')">✕</button></div>`; }).join('')
     :`<div class="empty" style="padding:18px"><p>No systems queued for scheduling yet.</p></div>`;
 }
 window.removePlan=async(id)=>{ extractionPlans=extractionPlans.filter(p=>p.id!==id); await savePlans(); };
@@ -604,30 +612,28 @@ document.getElementById('addPlanBtn').onclick=async()=>{
 };
 document.getElementById('optConst').addEventListener('change',e=>{ optFilter.constellation=e.target.value; renderCalendar(); renderPlanList(); });
 document.getElementById('optWindow').addEventListener('input',renderCalendar);
+document.getElementById('optExclude').addEventListener('input',async e=>{ excludeKeywords=parseExclude(e.target.value); await sSet(EXCLUDE_KEY,e.target.value); renderCalendar(); renderPlanList(); });
 document.getElementById('genPatternBtn').onclick=()=>{
-  const duration=Math.max(0.5,+document.getElementById('optDuration').value||7);
-  const windowDays=Math.max(3,Math.min(60,+document.getElementById('optWindow').value||14));
-  const today=startOfDay(now()); const dayCounts={};
-  refineryArrivals().filter(a=>optFilter.constellation==='all'||a.constellation===optFilter.constellation)
-    .forEach(a=>{ const k=dateKey(a.date); dayCounts[k]=(dayCounts[k]||0)+1; });
-  const plansToSchedule=extractionPlans.filter(p=>optFilter.constellation==='all'||(p.constellation||'Unknown')===optFilter.constellation);
+  const gap=Math.max(0.5,+document.getElementById('optDuration').value||7);
+  const today=startOfDay(now());
+  const plansToSchedule=extractionPlans.filter(p=>(optFilter.constellation==='all'||(p.constellation||'Unknown')===optFilter.constellation)&&!isExcluded(p.system,p.system));
   const out=document.getElementById('patternResult');
-  if(!plansToSchedule.length){ out.innerHTML=`<div class="empty" style="margin-top:10px"><p>Add at least one system to the plan above first.</p></div>`; return; }
-  const results=plansToSchedule.map(p=>{
-    let best=null;
-    for(let offset=0;offset<=windowDays;offset++){
-      const startDate=addDays(today,offset), arrivalDate=addDays(startDate,Math.round(duration)), key=dateKey(arrivalDate);
-      const load=dayCounts[key]||0;
-      if(best===null||load<best.load) best={offset,startDate,arrivalDate,load,key};
-    }
-    dayCounts[best.key]=(dayCounts[best.key]||0)+1;
-    return {...p,...best};
+  if(!plansToSchedule.length){ out.innerHTML=`<div class="empty" style="margin-top:10px"><p>No systems to schedule — add one above, or it may be hidden by your exclusion keywords.</p></div>`; return; }
+  // Expand each planned system into its refineries; plan ALL refineries in a system
+  // before moving on, and only after every system is done does the cycle restart.
+  const units=[];
+  plansToSchedule.forEach(p=>{
+    const refs=structures.filter(s=>TYPES[s.type].cat==='refinery' && (s.system||s.loc||'').toLowerCase()===p.system.toLowerCase() && !isExcluded(s.name,s.system||s.loc));
+    if(refs.length) refs.forEach(r=>units.push({system:p.system,constellation:p.constellation||r.constellation||'Unknown',refinery:r.name}));
+    else units.push({system:p.system,constellation:p.constellation||'Unknown',refinery:null});
   });
-  results.sort((a,b)=>a.offset-b.offset);
-  out.innerHTML=`<div class="tbl-wrap" style="margin-top:14px"><table>
-    <thead><tr><th class="l">System</th><th class="l">Constellation</th><th>Suggested start</th><th>Resulting arrival</th><th>Day load</th></tr></thead>
-    <tbody>${results.map(r=>`<tr><td class="l"><div class="nm">${esc(r.system)}</div></td><td class="l dim">${esc(r.constellation||'Unspecified')}</td>
-      <td>${dayLabel(r.startDate)}</td><td>${dayLabel(r.arrivalDate)}</td><td class="${r.load<=1?'gr':r.load<=2?'am':'rd'}">${r.load+1} arriving</td></tr>`).join('')}</tbody>
+  const N=units.length, cycleDays=Math.round(N*gap);
+  const results=units.map((u,i)=>{ const startDate=addDays(today,Math.round(i*gap)); return {...u,startDate,nextDate:addDays(startDate,cycleDays)}; });
+  out.innerHTML=`<div class="hint" style="margin-top:14px;margin-bottom:10px">${N} extraction${N!==1?'s':''} across ${plansToSchedule.length} system${plansToSchedule.length!==1?'s':''} · one full cycle every <b>${cycleDays}d</b>. Each system's refineries are all scheduled before the cycle returns to the first.</div>
+  <div class="tbl-wrap"><table>
+    <thead><tr><th class="l">#</th><th class="l">System</th><th class="l">Refinery</th><th class="l">Constellation</th><th>Suggested start</th><th>Next cycle</th></tr></thead>
+    <tbody>${results.map((r,i)=>`<tr><td class="l dim">${i+1}</td><td class="l"><div class="nm">${esc(r.system)}</div></td><td class="l">${r.refinery?esc(r.refinery):'<span class="dim">— not synced —</span>'}</td><td class="l dim">${esc(r.constellation||'Unspecified')}</td>
+      <td>${dayLabel(r.startDate)}</td><td class="dim">${dayLabel(r.nextDate)}</td></tr>`).join('')}</tbody>
   </table></div>`;
 };
 document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
@@ -805,6 +811,8 @@ setInterval(backgroundSync,30000); // live ESI update every 30 seconds
   structures=(await sGet(STORE_KEY))||[];
   fuelCollapse=(await sGet(COLLAPSE_KEY))||{moon:false,all:false};
   extractionPlans=(await sGet(PLAN_KEY))||[];
+  const exStr=(await sGet(EXCLUDE_KEY))||''; excludeKeywords=parseExclude(exStr);
+  const exEl=document.getElementById('optExclude'); if(exEl) exEl.value=exStr;
   session=(await sGet(TOKEN_KEY))||null;
   applyCollapse(); renderAll(); updateAuthView();
   if(new URLSearchParams(location.search).get('code')){ await resumeEsi(); return; }
