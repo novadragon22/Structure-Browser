@@ -494,7 +494,13 @@ const fmtRate=n=>(n==null||isNaN(n))?'0':(Math.round(n*100)/100).toLocaleString(
 function shortDate(iso){ const d=new Date(iso); return d.toLocaleString([],{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}); }
 function esc(s){ return (s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function hoursLeft(q,r){ if(!r||r<=0) return Infinity; return (q||0)/r; }
-function fuelHoursLeft(s){ if(s.fuelExpires) return (new Date(s.fuelExpires).getTime()-now())/3600000; return hoursLeft(s.fuel,combinedRate(s)); }
+function currentFuel(s){ // live blocks remaining, depleting from the last reading at the combined rate
+  const base=+s.fuel||0; if(!s.fuelAsOf) return base;
+  const el=(now()-new Date(s.fuelAsOf).getTime())/3600000; return Math.max(0, base-combinedRate(s)*el); }
+function fuelHoursLeft(s){
+  if(s.fuelAsOf && combinedRate(s)>0) return hoursLeft(currentFuel(s),combinedRate(s)); // depletes from reading time
+  if(s.fuelExpires) return (new Date(s.fuelExpires).getTime()-now())/3600000;
+  return hoursLeft(s.fuel,combinedRate(s)); }
 function fuelOk(s){ return fuelHoursLeft(s)>0; }
 function currentGas(s){ if(s.gasUnknown) return null; const base=+s.gas||0; if(!s.gasAsOf) return base;
   const el=(now()-new Date(s.gasAsOf).getTime())/3600000; return Math.max(0, base-(+s.gasRate||0)*el); }
@@ -555,7 +561,7 @@ function metenoxTable(list){
     const fh=fuelHoursLeft(s); const fLeft=fh===Infinity?'—':runwayText(fh);
     const fCol=fh===Infinity?'dim':(fh<=48?'rd':fh<=HR_WEEK?'am':'gr');
     let fuelQty;
-    if(s.fuelFromEsi) fuelQty=fmt(s.fuel);
+    if(s.fuelFromEsi) fuelQty=fmt(currentFuel(s));
     else if(s.fuelExpires&&fbr>0&&fh!==Infinity) fuelQty=fmt(fh*fbr)+' <i class="estt">est</i>';
     else fuelQty='<span class="dim">—</span>';
     const g=currentGas(s); const gh=gasHoursLeft(s);
@@ -582,7 +588,7 @@ function fuelTable(list,withGas){
     const fh=fuelHoursLeft(s); const fLeft=fh===Infinity?'—':runwayText(fh);
     const fCol=fh===Infinity?'dim':(fh<=48?'rd':fh<=HR_WEEK?'am':'gr');
     let held;
-    if(s.fuelFromEsi){ held=fmt(s.fuel); tHeld+=(+s.fuel||0); }
+    if(s.fuelFromEsi){ const cf=currentFuel(s); held=fmt(cf); tHeld+=cf; }
     else if(s.fuelExpires&&fb>0&&fh!==Infinity){ held=fmt(fh*fb)+' <i class="estt">est</i>'; tHeld+=fh*fb; }
     else held='<span class="dim">—</span>';
     let gl='',gc='';
@@ -820,12 +826,13 @@ document.getElementById('saveBtn').onclick=async()=>{
   if(editingId){ const o=structures.find(x=>x.id===editingId); o.type=type;o.name=name;o.services=svc;o.gasRate=gasRate;
     o.fuelRate=combinedRate(o);
     if(type==='metenox'){ o.gas=gas;o.gasAsOf=new Date().toISOString();o.gasUnknown=false; }
-    if(!o.esiId){ o.loc=document.getElementById('fLoc').value.trim();o.system=o.loc;o.fuel=fuel;o.fuelExpires=(o.fuelRate>0?new Date(now()+(fuel/o.fuelRate)*3600000).toISOString():null);o.extractionEnd=ext; }
-    else { o.fuel=fuel; if(o.fuelRate>0) o.fuelExpires=new Date(now()+(fuel/o.fuelRate)*3600000).toISOString(); if(ext) o.extractionEnd=ext; }
+    o.fuel=fuel; o.fuelAsOf=new Date().toISOString(); // anchor depletion clock to this edit
+    if(!o.esiId){ o.loc=document.getElementById('fLoc').value.trim();o.system=o.loc;o.fuelExpires=null;o.extractionEnd=ext; }
+    else if(ext){ o.extractionEnd=ext; }
   } else { const loc=document.getElementById('fLoc').value.trim();
     const o={id:'s'+Date.now()+Math.random().toString(36).slice(2,6),type,name,loc,system:loc,constellation:'Unknown',
-      services:svc,fuel,gas,gasRate,gasAsOf:new Date().toISOString(),gasUnknown:false,extractionEnd:ext};
-    o.fuelRate=combinedRate(o); o.fuelExpires=(o.fuelRate>0?new Date(now()+(fuel/o.fuelRate)*3600000).toISOString():null);
+      services:svc,fuel,fuelAsOf:new Date().toISOString(),gas,gasRate,gasAsOf:new Date().toISOString(),gasUnknown:false,extractionEnd:ext};
+    o.fuelRate=combinedRate(o);
     structures.push(o); }
   closeModal(); await save();
 };
@@ -970,12 +977,13 @@ async function importFromEsi(token,silent){
     o.fuelExpires=st.fuel_expires||null; o.unanchorsAt=st.unanchors_at||null; o.state=st.state||null;
     o.fuelRate=combinedRate(o); // Dogma base × hull multiplier, summed over online services (float)
     if(o.fuel==null) o.fuel=0;
-    // fuel-bay block count from corp assets — refreshed on every sync (30s)
+    // fuel-bay block count from corp assets. Re-anchor the depletion clock ONLY when the count changes
+    // (ESI caches assets ~1h) so the runway keeps counting down between syncs instead of resetting.
     if(fuelMap[st.structure_id]!=null){
-      o.fuel=fuelMap[st.structure_id]; o.fuelFromEsi=true;
-      // recompute expiry from blocks held ÷ combined hourly rate so runway matches fuel remaining app-wide
-      if(o.fuelRate>0) o.fuelExpires=new Date(now()+(o.fuel/o.fuelRate)*3600000).toISOString();
-    } else o.fuelFromEsi=false;
+      const newCount=fuelMap[st.structure_id];
+      if(!o.fuelFromEsi || o.fuel!==newCount || !o.fuelAsOf){ o.fuel=newCount; o.fuelAsOf=new Date().toISOString(); }
+      o.fuelFromEsi=true;
+    } else { o.fuelFromEsi=false; }
     if(TYPES[typeKey].cat==='refinery'&&exMap[st.structure_id]) o.extractionEnd=exMap[st.structure_id];
     if(typeKey==='metenox'){
       if(o.gasRate==null) o.gasRate=TYPES.metenox.gas;
