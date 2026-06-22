@@ -251,19 +251,14 @@
   .toast.show{opacity:1}
   .footer{font-family:var(--mono);font-size:9.5px;color:var(--muted2);text-align:center;letter-spacing:.04em;line-height:1.7;border-top:1px solid var(--line);margin-top:26px;padding-top:16px}
 
-  /* picture-in-picture watch panel */
-  .pip-body{margin:0;padding:10px;background:var(--bg);font-family:var(--sans);color:var(--text)}
-  .pip-h{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--gold-dim);display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  /* picture-in-picture: mirrors the active page/subtab, scrolls for long lists */
+  .pip-body{margin:0;padding:10px;background:var(--bg);font-family:var(--sans);color:var(--text);height:100vh;overflow-y:auto;box-sizing:border-box}
+  .pip-h{position:sticky;top:-10px;z-index:5;background:var(--bg);font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--gold-dim);display:flex;align-items:center;gap:8px;padding:4px 0 8px;margin-bottom:6px;border-bottom:1px solid var(--line)}
   .pip-h .di{width:9px;height:9px}
-  .pip-sec{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:12px 0 5px}
-  .pip-row{display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--line);border-left:2px solid var(--cyan);background:var(--panel2);margin-bottom:4px}
-  .pip-row.extracting{border-left-color:var(--green)} .pip-row.ready{border-left-color:var(--cyan)}
-  .pip-row.crit{border-left-color:var(--red)} .pip-row.dec{border-left-color:var(--red)}
-  .pip-name{font-family:var(--mono);font-size:11px;color:#dfe7ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-  .pip-sub{font-family:var(--mono);font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-  .pip-time{font-family:var(--mono);font-size:11px;font-weight:600;white-space:nowrap}
-  .pip-time.gr{color:var(--green)} .pip-time.cy{color:var(--cyan)} .pip-time.am{color:var(--gold)} .pip-time.rd{color:var(--red)}
-  .pip-empty{font-family:var(--mono);font-size:10px;color:var(--muted2);text-align:center;padding:24px 0}
+  .pip-mirror .panel-title{font-size:11px;margin-bottom:10px}
+  .pip-mirror .grid{grid-template-columns:1fr}
+  .pip-mirror .subtabs,.pip-mirror .fuel-controls,.pip-mirror .plan-form,.pip-mirror .btn-gold,.pip-mirror datalist{display:none}
+  .pip-mirror .card-actions{display:none}
 </style>
 </head>
 <body>
@@ -572,7 +567,7 @@ function renderAll(){
 document.querySelectorAll('.subtab').forEach(t=>t.addEventListener('click',()=>{
   document.querySelectorAll('.subtab').forEach(x=>x.classList.remove('on')); t.classList.add('on');
   document.querySelectorAll('.subpanel').forEach(p=>p.classList.remove('on'));
-  document.getElementById('sub-'+t.dataset.sub).classList.add('on'); }));
+  document.getElementById('sub-'+t.dataset.sub).classList.add('on'); renderPip(); }));
 
 /* ---------- optimised extraction: calendar + staggered scheduling ---------- */
 const PLAN_KEY='eve_extraction_plans_v1', EXCLUDE_KEY='eve_extraction_exclude_v1';
@@ -655,7 +650,7 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
   document.querySelectorAll('.tab').forEach(x=>x.classList.remove('on')); t.classList.add('on');
   const map={extractions:'sec-extractions',idle:'sec-idle',fuel:'sec-fuel',decom:'sec-decom'};
   document.querySelectorAll('section.sec').forEach(s=>s.classList.remove('on'));
-  document.getElementById(map[t.dataset.sec]).classList.add('on'); }));
+  document.getElementById(map[t.dataset.sec]).classList.add('on'); renderPip(); }));
 
 /* ---------- collapse ---------- */
 function applyCollapse(){ ['moon','all'].forEach(k=>{ document.getElementById(k+'Head').classList.toggle('collapsed',fuelCollapse[k]);
@@ -729,22 +724,10 @@ function timeLeft(s){ return s.extractionEnd?new Date(s.extractionEnd).getTime()
 function renderPip(){
   if(!pipWin || pipWin.closed) return;
   const root=pipWin.document.getElementById('pipRoot'); if(!root) return;
-  const mining=structures.filter(s=>TYPES[s.type].mining && statusOf(s)!=='decommissioning');
-  const ext=mining.filter(s=>['extracting','ready'].includes(statusOf(s))).sort((a,b)=>timeLeft(a)-timeLeft(b));
-  const crit=structures.filter(s=>{ if(statusOf(s)==='decommissioning')return false; const h=fuelHoursLeft(s); return h!==Infinity&&h<=48; }).sort((a,b)=>fuelHoursLeft(a)-fuelHoursLeft(b));
-  const dec=structures.filter(s=>statusOf(s)==='decommissioning').sort((a,b)=>(a.unanchorsAt?new Date(a.unanchorsAt):Infinity)-(b.unanchorsAt?new Date(b.unanchorsAt):Infinity));
-  let html=`<div class="pip-h"><span class="di diamond"></span>Structure Ops · live</div>`;
-  html+=`<div class="pip-sec">Extractions (${ext.length})</div>`;
-  html+=ext.length?ext.map(s=>{ const st=statusOf(s); const tl=timeLeft(s);
-    const txt = st==='ready'?'READY':(tl===Infinity?'—':runwayText(tl/3600000));
-    const cls = st==='ready'?'cy':(tl<=24*3600000?'am':'gr');
-    return `<div class="pip-row ${st}"><span class="pip-name">${esc(s.name)||'Unnamed'}<div class="pip-sub">${esc(s.system||s.loc||'')}</div></span><span class="pip-time ${cls}">${txt}</span></div>`; }).join('')
-    :`<div class="pip-empty">Nothing mining</div>`;
-  if(crit.length){ html+=`<div class="pip-sec">Fuel critical (${crit.length})</div>`;
-    html+=crit.map(s=>{ const h=fuelHoursLeft(s); return `<div class="pip-row crit"><span class="pip-name">${esc(s.name)||'Unnamed'}<div class="pip-sub">${esc(s.system||s.loc||'')}</div></span><span class="pip-time rd">${runwayText(h)}</span></div>`; }).join(''); }
-  if(dec.length){ html+=`<div class="pip-sec">Unanchoring (${dec.length})</div>`;
-    html+=dec.map(s=>{ const cd=s.unanchorsAt?countdown(new Date(s.unanchorsAt).getTime()):null; return `<div class="pip-row dec"><span class="pip-name">${esc(s.name)||'Unnamed'}<div class="pip-sub">${esc(s.system||s.loc||'')}</div></span><span class="pip-time rd">${cd||'—'}</span></div>`; }).join(''); }
-  root.innerHTML=html;
+  const sec=document.querySelector('section.sec.on');
+  const tab=document.querySelector('.tab.on');
+  const label=tab?(tab.querySelector('span')?tab.querySelector('span').textContent:tab.textContent).trim():'Structure Ops';
+  root.innerHTML=`<div class="pip-h"><span class="di diamond"></span>${esc(label)}</div><div class="pip-mirror">${sec?sec.innerHTML:''}</div>`;
 }
 async function togglePip(){
   if(pipWin && !pipWin.closed){ pipWin.close(); pipWin=null; return; }
