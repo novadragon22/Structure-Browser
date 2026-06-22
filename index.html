@@ -205,6 +205,7 @@
   .subhead{font-family:var(--mono);font-size:14px;letter-spacing:.1em;text-transform:uppercase;color:var(--text);margin:24px 0 12px;display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
   .subhead .di{width:8px;height:18px;clip-path:none}
   .subhead.moon .di{background:linear-gradient(180deg,var(--gold),var(--gold-deep))}
+  .subhead.metenox .di{background:linear-gradient(180deg,var(--gold-bright),var(--gold))}
   .subhead.all .di{background:linear-gradient(180deg,var(--cyan),#1a4050)}
   .subhead small{font-family:var(--mono);font-size:10px;letter-spacing:.04em;text-transform:none;color:var(--muted2);font-weight:400}
   .subhead .chev{margin-left:auto;font-size:12px;color:var(--muted);transition:transform .15s}
@@ -273,7 +274,7 @@
     <p>Sign in with EVE SSO to pull your corp's structures, fuel and unanchor timers. Structure scopes only — read access, nothing else. The character must hold the <strong style="color:var(--gold)">Director</strong> role.</p>
     <button class="btn-gold" id="gateAuth"><span class="di diamond"></span> Authorize with EVE Online</button>
     <div class="gate-err" id="gateErr"></div>
-    <div class="gate-hint">This app is pre-configured — nothing to fill in. Your character and corp are read via EVE SSO with the <strong>read_structures</strong> and <strong>read_corporation_mining</strong> scopes.</div>
+    <div class="gate-hint">This app is pre-configured — nothing to fill in. Your character and corp are read via EVE SSO with the <strong>read_structures</strong>, <strong>read_corporation_mining</strong> and <strong>read_corporation_assets</strong> scopes.</div>
   </div>
   <div class="gate-skip"><a id="gateSkip">Continue without signing in →</a></div>
 </div>
@@ -344,6 +345,8 @@
           <select id="fuelSys"><option value="all">All systems</option></select>
         </div>
         <div class="fuel-summary" id="fuelSummary"></div>
+        <div class="subhead metenox" id="metenoxHead"><span class="di"></span>Metenox moon drills <small id="metenoxSub"></small><span class="chev">▾</span></div>
+        <div id="metenoxFuel" class="fuel-table-wrap"></div>
         <div class="subhead moon" id="moonHead"><span class="di"></span>Moon drilling <small id="moonSub"></small><span class="chev">▾</span></div>
         <div id="moonFuel" class="fuel-table-wrap"></div>
         <div class="subhead all" id="allHead"><span class="di"></span>All structures <small id="allSub"></small><span class="chev">▾</span></div>
@@ -387,10 +390,10 @@
       <h3>Connecting</h3>
       <p>This app connects only via live EVE SSO — the application Client ID and callback are embedded in the code, so there's nothing to configure. Click Authorize, pick your character, and approve the scopes below.</p>
       <h3>Scopes &amp; role</h3>
-      <ul><li><code>esi-corporations.read_structures.v1</code></li><li><code>esi-universe.read_structures.v1</code></li><li><code>esi-industry.read_corporation_mining.v1</code></li></ul>
+      <ul><li><code>esi-corporations.read_structures.v1</code></li><li><code>esi-universe.read_structures.v1</code></li><li><code>esi-industry.read_corporation_mining.v1</code></li><li><code>esi-assets.read_corporation_assets.v1</code></li></ul>
       <p>The authorizing character needs the <strong style="color:var(--gold)">Director</strong> role.</p>
       <h3>What's tracked</h3>
-      <p>Fuel block runway via ESI's fuel expiry timestamp on each structure. Metenox drills are ignored unless they're unanchoring. Magmatic gas isn't exposed by ESI, so it's set manually via Edit and counts down live at your configured rate. Auto-syncs every 2 minutes.</p>
+      <p>Fuel runway comes from ESI's fuel-expiry timestamp on each structure. The Structure fuel tab has a dedicated Metenox moon drills section that reads fuel blocks and the magmatic gas reagent from corp assets (<code>read_corporation_assets</code>). Auto-syncs every 30 seconds.</p>
     </div>
     <div class="modal-actions"><button class="btn gold" onclick="closeModal()">Close</button></div>
   </div>
@@ -413,14 +416,16 @@ const TYPES={
   other:{label:'Other structure',short:'OTHER',cls:'other',cat:'other',mining:false,fb:5,gas:0},
 };
 const ESI_TYPE={35825:'raitaru',35826:'azbel',35827:'sotiyo',35832:'astrahus',35833:'fortizar',35834:'keepstar',35835:'athanor',35836:'tatara',81826:'metenox'};
-const ESI_SCOPES=['esi-corporations.read_structures.v1','esi-universe.read_structures.v1','esi-industry.read_corporation_mining.v1'];
+const ESI_SCOPES=['esi-corporations.read_structures.v1','esi-universe.read_structures.v1','esi-industry.read_corporation_mining.v1','esi-assets.read_corporation_assets.v1'];
+const FUEL_BLOCK_TYPES=new Set([4051,4246,4247,4312]); // Nitrogen/Hydrogen/Helium/Oxygen fuel blocks
+const MAGMATIC_GAS_TYPE=81143; // Magmatic Gas reagent
 const SSO_AUTH='https://login.eveonline.com/v2/oauth/authorize/';
 const SSO_TOKEN='https://login.eveonline.com/v2/oauth/token';
 const ESI_BASE='https://esi.evetech.net/latest';
 const APP_CONFIG={ clientId:'c56ca3a4c87142cf84d6d380a1b2f95b', redirectUri:'https://novadragon22.github.io/Structure-Browser/' };
 const STORE_KEY='eve_structures_v3', TOKEN_KEY='eve_esi_token_v3', COLLAPSE_KEY='eve_fuel_collapse_v3';
 let structures=[], session=null, editingId=null, bypass=false;
-let fuelFilter={q:'',constellation:'all',system:'all'}, fuelCollapse={moon:false,all:false};
+let fuelFilter={q:'',constellation:'all',system:'all'}, fuelCollapse={metenox:false,moon:false,all:false};
 
 /* ---------- storage ---------- */
 const _mem={};
@@ -491,6 +496,28 @@ function card(s,opts){
     ${body}${actions}</div>`;
 }
 
+function metenoxTable(list){
+  if(!list.length) return `<div class="empty"><p>No Metenox moon drills found. They appear here once your corp owns one and it's returned by ESI.</p></div>`;
+  let tfb=0,tg=0;
+  const rows=list.map(s=>{
+    const fbr=s.fuelRate||0; tfb+=fbr; const gr=s.gasRate||0; tg+=gr;
+    const fh=fuelHoursLeft(s); const fLeft=fh===Infinity?'—':runwayText(fh);
+    const fCol=fh===Infinity?'dim':(fh<=48?'rd':fh<=HR_WEEK?'am':'gr');
+    const fuelQty=s.fuelFromEsi?fmt(s.fuel):'<span class="dim">— n/a —</span>';
+    const g=currentGas(s); const gh=gasHoursLeft(s);
+    const gasQty=s.gasUnknown?'<span class="dim">not in ESI</span>':(fmt(g)+(s.gasFromEsi?'':' <i style="color:var(--muted2);font-style:normal">est</i>'));
+    const gLeft=s.gasUnknown?'<span class="dim">—</span>':(gh===Infinity?'—':runwayText(gh));
+    const gCol=s.gasUnknown?'dim':(gh<=48?'rd':gh<=HR_WEEK?'am':'gas');
+    return `<tr><td class="l"><div class="nm">${esc(s.name)||'Unnamed'}</div><div class="ty">${esc(s.system||s.loc)||'—'} · ${esc(s.constellation||'—')}</div></td>
+      <td class="fb">${fuelQty}</td><td class="${fCol}">${fLeft}</td>
+      <td class="gas">${gasQty}</td><td class="${gCol}">${gLeft}</td><td class="gas">${fmt(gr)}/hr</td></tr>`;
+  }).join('');
+  return `<div class="tbl-wrap"><table>
+    <thead><tr><th class="l">Metenox</th><th>Fuel blocks</th><th>Fuel left</th><th>Magmatic gas</th><th>Gas left</th><th>Gas draw</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td class="l">Total — ${list.length} drill${list.length!==1?'s':''}</td><td class="fb">${fmt(tfb)}/hr</td><td></td><td></td><td></td><td class="gas">${fmt(tg)}/hr</td></tr></tfoot>
+  </table></div>`;
+}
 function fuelTable(list,withGas){
   if(!list.length) return `<div class="empty"><p>No structures match.</p></div>`;
   let tfb=0,tg=0;
@@ -528,19 +555,19 @@ function refreshFuelFilters(active){
   if(fuelFilter.system!=='all'&&!systems.includes(fuelFilter.system)) fuelFilter.system='all';
   sSel.innerHTML='<option value="all">All systems</option>'+systems.map(s=>`<option value="${esc(s)}">${esc(s)}</option>`).join(''); sSel.value=fuelFilter.system;
 }
-function renderFuelSummary(moon,all){ const a=[...moon,...all];
-  const tfb=a.reduce((x,s)=>x+(s.fuelRate||0),0), tg=moon.reduce((x,s)=>x+(s.type==='metenox'?(s.gasRate||0):0),0);
+function renderFuelSummary(metenox,moon,all){ const a=[...metenox,...moon,...all];
+  const tfb=a.reduce((x,s)=>x+(s.fuelRate||0),0), tg=metenox.reduce((x,s)=>x+(s.gasRate||0),0);
   document.getElementById('fuelSummary').innerHTML=`
     <div class="ftile fb"><div class="l">Fuel blocks / month</div><div class="v">${fmt(tfb*HR_MONTH)}</div><div class="sub">${fmt(tfb)}/hr · ${fmt(tfb*HR_WEEK)}/wk</div></div>
-    <div class="ftile gas"><div class="l">Magmatic gas / month</div><div class="v">${fmt(tg*HR_MONTH)}</div><div class="sub">${fmt(tg)}/hr · ${fmt(tg*HR_WEEK)}/wk</div></div>
-    <div class="ftile"><div class="l">Structures shown</div><div class="v">${a.length}</div><div class="sub">${moon.length} mining · ${all.length} support</div></div>`; }
+    <div class="ftile gas"><div class="l">Magmatic gas / month</div><div class="v">${fmt(tg*HR_MONTH)}</div><div class="sub">${fmt(tg)}/hr · ${fmt(tg*HR_WEEK)}/wk · ${metenox.length} drill${metenox.length!==1?'s':''}</div></div>
+    <div class="ftile"><div class="l">Structures shown</div><div class="v">${a.length}</div><div class="sub">${metenox.length} metenox · ${moon.length} refinery · ${all.length} support</div></div>`; }
 
 /* ---------- render ---------- */
 function emptyBox(h,p){ return `<div class="empty"><h3>${h}</h3><p>${p}</p></div>`; }
 function renderAll(){
   const decom=structures.filter(s=>statusOf(s)==='decommissioning');
   const active=structures.filter(s=>statusOf(s)!=='decommissioning');
-  const mining=active.filter(s=>TYPES[s.type].mining);
+  const mining=active.filter(s=>TYPES[s.type].mining && s.type!=='metenox'); // Metenox handled in their own section
   const extracting=mining.filter(s=>['extracting','ready'].includes(statusOf(s)))
     .sort((a,b)=>(a.extractionEnd?new Date(a.extractionEnd).getTime()-now():Infinity)-(b.extractionEnd?new Date(b.extractionEnd).getTime()-now():Infinity));
   const idle=mining.filter(s=>statusOf(s)==='idle');
@@ -552,11 +579,15 @@ function renderAll(){
   document.getElementById('idleGrid').innerHTML=idle.length?idle.map(card).join(''):emptyBox('No idle drills','Idle refineries land here.');
   refreshFuelFilters(active);
   const filtered=applyFuelFilters(active);
-  const moon=filtered.filter(s=>TYPES[s.type].mining), all=filtered.filter(s=>!TYPES[s.type].mining);
-  renderFuelSummary(moon,all);
-  document.getElementById('moonSub').textContent=`refineries${moon.some(s=>s.type==='metenox')?' + metenox':''} · fuel blocks${moon.some(s=>s.type==='metenox')?' & gas':''}`;
+  const metenox=filtered.filter(s=>s.type==='metenox');
+  const moon=filtered.filter(s=>TYPES[s.type].mining && s.type!=='metenox');
+  const all=filtered.filter(s=>!TYPES[s.type].mining);
+  renderFuelSummary(metenox,moon,all);
+  document.getElementById('metenoxSub').textContent=`${metenox.length} drill${metenox.length!==1?'s':''} · fuel blocks & magmatic gas (ESI assets)`;
+  document.getElementById('moonSub').textContent='refineries · fuel blocks';
   document.getElementById('allSub').textContent='citadels, engineering complexes & other';
-  document.getElementById('moonFuel').innerHTML=fuelTable(moon,moon.some(s=>s.type==='metenox'));
+  document.getElementById('metenoxFuel').innerHTML=metenoxTable(metenox);
+  document.getElementById('moonFuel').innerHTML=fuelTable(moon,false);
   document.getElementById('allFuel').innerHTML=fuelTable(all,false);
   document.getElementById('decomGrid').innerHTML=decom.length?decom.map(card).join(''):emptyBox('Nothing unanchoring','Structures your corp is decommissioning appear here automatically from ESI, each with its unanchor countdown.');
   refreshOptFilters(active); renderCalendar(); renderPlanList();
@@ -653,8 +684,8 @@ document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
   document.getElementById(map[t.dataset.sec]).classList.add('on'); renderPip(); }));
 
 /* ---------- collapse ---------- */
-function applyCollapse(){ ['moon','all'].forEach(k=>{ document.getElementById(k+'Head').classList.toggle('collapsed',fuelCollapse[k]);
-  document.getElementById(k+'Fuel').classList.toggle('collapsed',fuelCollapse[k]); }); }
+function applyCollapse(){ ['metenox','moon','all'].forEach(k=>{ const h=document.getElementById(k+'Head'); const f=document.getElementById(k+'Fuel'); if(h)h.classList.toggle('collapsed',fuelCollapse[k]); if(f)f.classList.toggle('collapsed',fuelCollapse[k]); }); }
+document.getElementById('metenoxHead').onclick=async()=>{ fuelCollapse.metenox=!fuelCollapse.metenox; applyCollapse(); await sSet(COLLAPSE_KEY,fuelCollapse); };
 document.getElementById('moonHead').onclick=async()=>{ fuelCollapse.moon=!fuelCollapse.moon; applyCollapse(); await sSet(COLLAPSE_KEY,fuelCollapse); };
 document.getElementById('allHead').onclick=async()=>{ fuelCollapse.all=!fuelCollapse.all; applyCollapse(); await sSet(COLLAPSE_KEY,fuelCollapse); };
 document.getElementById('fuelSearch').addEventListener('input',e=>{ fuelFilter.q=e.target.value; renderAll(); });
@@ -764,6 +795,11 @@ async function sha256(s){ return await crypto.subtle.digest('SHA-256',new TextEn
 function randStr(n){ const a=new Uint8Array(n); crypto.getRandomValues(a); return b64url(a.buffer); }
 function jwtPayload(t){ return JSON.parse(atob(t.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))); }
 async function esiGet(path,token){ const r=await fetch(ESI_BASE+path,{headers:token?{Authorization:'Bearer '+token}:{}}); if(!r.ok) throw new Error('ESI '+r.status); return r.json(); }
+async function esiGetPaged(path,token,cap){ const sep=path.includes('?')?'&':'?';
+  const f=await fetch(ESI_BASE+path+sep+'page=1',{headers:{Authorization:'Bearer '+token}}); if(!f.ok) throw new Error('ESI '+f.status);
+  let out=await f.json(); const pages=Math.min(parseInt(f.headers.get('X-Pages')||'1',10),cap||20);
+  for(let p=2;p<=pages;p++){ try{ const r=await fetch(ESI_BASE+path+sep+'page='+p,{headers:{Authorization:'Bearer '+token}}); if(r.ok) out=out.concat(await r.json()); }catch(e){} }
+  return out; }
 async function postToken(body){ const r=await fetch(SSO_TOKEN,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});
   if(!r.ok){ let d=''; try{ d=' '+(await r.text()).slice(0,120); }catch(e){} throw new Error('HTTP '+r.status+d); } return r.json(); }
 function storeFromToken(tok){ const p=jwtPayload(tok.access_token);
@@ -810,10 +846,15 @@ async function importFromEsi(token,silent){
   const list=await esiGet('/corporations/'+corpId+'/structures/',token);
   let extractions=[]; try{ extractions=await esiGet('/corporation/'+corpId+'/mining/extractions/',token); }catch(e){}
   const exMap={}; extractions.forEach(x=>{ exMap[x.structure_id]=x.chunk_arrival_time; });
+  // corp assets → fuel blocks + magmatic gas held in each structure's fuel bay (for Metenox section)
+  const fuelMap={},gasMap={}; let assetsScopeMissing=false;
+  try{ const assets=await esiGetPaged('/corporations/'+corpId+'/assets/',token,30);
+    assets.forEach(a=>{ if(a.location_flag!=='StructureFuel') return; const sid=a.location_id,q=a.quantity||0;
+      if(FUEL_BLOCK_TYPES.has(a.type_id)) fuelMap[sid]=(fuelMap[sid]||0)+q; else if(a.type_id===MAGMATIC_GAS_TYPE) gasMap[sid]=(gasMap[sid]||0)+q; });
+  }catch(e){ if(/\b403\b/.test(e.message)) assetsScopeMissing=true; }
   const sysCache={},constCache={}; let added=0,updated=0; const seen=new Set();
   for(const st of list){
     const typeKey=ESI_TYPE[st.type_id]||'other';
-    if(typeKey==='metenox' && !st.unanchors_at) continue; // forget Metenox unless unanchoring
     let sysName='',constName='';
     try{ if(!sysCache[st.system_id]){ const sy=await esiGet('/universe/systems/'+st.system_id+'/',token); sysCache[st.system_id]=sy.name;
         if(sy.constellation_id){ if(!constCache[sy.constellation_id]){ try{ constCache[sy.constellation_id]=(await esiGet('/universe/constellations/'+sy.constellation_id+'/',token)).name; }catch(e){ constCache[sy.constellation_id]=''; } } sysCache['c'+st.system_id]=constCache[sy.constellation_id]; } }
@@ -826,14 +867,21 @@ async function importFromEsi(token,silent){
     if(o.fuelRate==null) o.fuelRate=TYPES[typeKey].fb;
     if(o.fuel==null) o.fuel=0;
     if(TYPES[typeKey].cat==='refinery'&&exMap[st.structure_id]) o.extractionEnd=exMap[st.structure_id];
-    if(typeKey==='metenox'){ if(o.gasRate==null) o.gasRate=TYPES.metenox.gas;
-      if(o.gas==null) o.gas=0; if(o.gasUnknown==null) o.gasUnknown=true; }
+    if(typeKey==='metenox'){
+      if(o.gasRate==null) o.gasRate=TYPES.metenox.gas;
+      // fuel blocks from assets
+      if(fuelMap[st.structure_id]!=null){ o.fuel=fuelMap[st.structure_id]; o.fuelFromEsi=true; } else o.fuelFromEsi=false;
+      // magmatic gas reagent from assets (esi-assets.read_corporation_assets.v1)
+      if(gasMap[st.structure_id]!=null){ o.gas=gasMap[st.structure_id]; o.gasAsOf=new Date().toISOString(); o.gasUnknown=false; o.gasFromEsi=true; }
+      else { o.gasFromEsi=false; if(o.gas==null) o.gas=0; if(o.gasUnknown==null) o.gasUnknown=true; }
+    }
     if(ex) updated++; else { structures.push(o); added++; }
   }
   const before=structures.length; structures=structures.filter(s=>!s.esiId||seen.has(s.esiId)); const removed=before-structures.length;
   await save(); setSyncDot('ok');
   if(silent) return;
-  toast('Synced '+added+' new, updated '+updated+(removed?', removed '+removed:'')+'. Fuel runway from ESI expiry. Metenox tracked only while unanchoring.');
+  const tail=assetsScopeMissing?'Re-authorize to grant asset access for Metenox fuel & magmatic gas.':'Metenox fuel & magmatic gas read from corp assets.';
+  toast('Synced '+added+' new, updated '+updated+(removed?', removed '+removed:'')+'. '+tail);
 }
 async function syncNow(){ const b=document.getElementById('syncBtn'); if(b){b.disabled=true;b.textContent='Syncing…';}
   try{ const v=await getValidToken(); if(!v){ gateErr&&0; toast('Session expired — reconnect.'); showGate(); } else await importFromEsi(v.access); }
@@ -853,7 +901,7 @@ setInterval(backgroundSync,30000); // live ESI update every 30 seconds
 (async function init(){
   document.getElementById('footer').textContent='';
   structures=(await sGet(STORE_KEY))||[];
-  fuelCollapse=(await sGet(COLLAPSE_KEY))||{moon:false,all:false};
+  fuelCollapse=(await sGet(COLLAPSE_KEY))||{metenox:false,moon:false,all:false};
   extractionPlans=(await sGet(PLAN_KEY))||[];
   const exStr=(await sGet(EXCLUDE_KEY))||''; excludeKeywords=parseExclude(exStr);
   const exEl=document.getElementById('optExclude'); if(exEl) exEl.value=exStr;
