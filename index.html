@@ -250,6 +250,20 @@
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--panel);border:1px solid var(--gold);color:var(--text);font-family:var(--mono);font-size:12px;padding:11px 18px;z-index:9500;max-width:90%;text-align:center;opacity:0;transition:.25s;pointer-events:none;box-shadow:0 12px 40px rgba(0,0,0,.5)}
   .toast.show{opacity:1}
   .footer{font-family:var(--mono);font-size:9.5px;color:var(--muted2);text-align:center;letter-spacing:.04em;line-height:1.7;border-top:1px solid var(--line);margin-top:26px;padding-top:16px}
+
+  /* picture-in-picture watch panel */
+  .pip-body{margin:0;padding:10px;background:var(--bg);font-family:var(--sans);color:var(--text)}
+  .pip-h{font-family:var(--mono);font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--gold-dim);display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .pip-h .di{width:9px;height:9px}
+  .pip-sec{font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:12px 0 5px}
+  .pip-row{display:flex;align-items:center;gap:8px;padding:6px 9px;border:1px solid var(--line);border-left:2px solid var(--cyan);background:var(--panel2);margin-bottom:4px}
+  .pip-row.extracting{border-left-color:var(--green)} .pip-row.ready{border-left-color:var(--cyan)}
+  .pip-row.crit{border-left-color:var(--red)} .pip-row.dec{border-left-color:var(--red)}
+  .pip-name{font-family:var(--mono);font-size:11px;color:#dfe7ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .pip-sub{font-family:var(--mono);font-size:8.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+  .pip-time{font-family:var(--mono);font-size:11px;font-weight:600;white-space:nowrap}
+  .pip-time.gr{color:var(--green)} .pip-time.cy{color:var(--cyan)} .pip-time.am{color:var(--gold)} .pip-time.rd{color:var(--red)}
+  .pip-empty{font-family:var(--mono);font-size:10px;color:var(--muted2);text-align:center;padding:24px 0}
 </style>
 </head>
 <body>
@@ -551,6 +565,7 @@ function renderAll(){
   document.getElementById('allFuel').innerHTML=fuelTable(all,false);
   document.getElementById('decomGrid').innerHTML=decom.length?decom.map(card).join(''):emptyBox('Nothing unanchoring','Structures your corp is decommissioning appear here automatically from ESI, each with its unanchor countdown.');
   refreshOptFilters(active); renderCalendar(); renderPlanList();
+  renderPip();
 }
 
 /* ---------- subtabs (Extractions: Active / Optimised) ---------- */
@@ -696,10 +711,56 @@ function renderTopbar(){
   } else {
     html+=`<button class="tb-btn" onclick="showGate()">Connect ESI</button>`;
   }
+  if('documentPictureInPicture' in window) html+=`<button class="tb-btn" id="pipBtn" onclick="togglePip()">⧉ Pop out</button>`;
   html+=`<button class="tb-btn" onclick="openModal('help')">? Help</button>`;
   r.innerHTML=html;
 }
 function setSyncDot(state){ const d=document.getElementById('syncDot'); if(d) d.className='char-dot'+(state==='busy'?' busy':''); }
+
+/* ---------- picture-in-picture watch panel (always-on-top) ---------- */
+let pipWin=null;
+function copyStylesTo(win){
+  [...document.styleSheets].forEach(ss=>{
+    try{ const css=[...ss.cssRules].map(r=>r.cssText).join(''); const st=win.document.createElement('style'); st.textContent=css; win.document.head.appendChild(st); }
+    catch(e){ if(ss.href){ const l=win.document.createElement('link'); l.rel='stylesheet'; l.href=ss.href; win.document.head.appendChild(l); } }
+  });
+}
+function timeLeft(s){ return s.extractionEnd?new Date(s.extractionEnd).getTime()-now():Infinity; }
+function renderPip(){
+  if(!pipWin || pipWin.closed) return;
+  const root=pipWin.document.getElementById('pipRoot'); if(!root) return;
+  const mining=structures.filter(s=>TYPES[s.type].mining && statusOf(s)!=='decommissioning');
+  const ext=mining.filter(s=>['extracting','ready'].includes(statusOf(s))).sort((a,b)=>timeLeft(a)-timeLeft(b));
+  const crit=structures.filter(s=>{ if(statusOf(s)==='decommissioning')return false; const h=fuelHoursLeft(s); return h!==Infinity&&h<=48; }).sort((a,b)=>fuelHoursLeft(a)-fuelHoursLeft(b));
+  const dec=structures.filter(s=>statusOf(s)==='decommissioning').sort((a,b)=>(a.unanchorsAt?new Date(a.unanchorsAt):Infinity)-(b.unanchorsAt?new Date(b.unanchorsAt):Infinity));
+  let html=`<div class="pip-h"><span class="di diamond"></span>Structure Ops · live</div>`;
+  html+=`<div class="pip-sec">Extractions (${ext.length})</div>`;
+  html+=ext.length?ext.map(s=>{ const st=statusOf(s); const tl=timeLeft(s);
+    const txt = st==='ready'?'READY':(tl===Infinity?'—':runwayText(tl/3600000));
+    const cls = st==='ready'?'cy':(tl<=24*3600000?'am':'gr');
+    return `<div class="pip-row ${st}"><span class="pip-name">${esc(s.name)||'Unnamed'}<div class="pip-sub">${esc(s.system||s.loc||'')}</div></span><span class="pip-time ${cls}">${txt}</span></div>`; }).join('')
+    :`<div class="pip-empty">Nothing mining</div>`;
+  if(crit.length){ html+=`<div class="pip-sec">Fuel critical (${crit.length})</div>`;
+    html+=crit.map(s=>{ const h=fuelHoursLeft(s); return `<div class="pip-row crit"><span class="pip-name">${esc(s.name)||'Unnamed'}<div class="pip-sub">${esc(s.system||s.loc||'')}</div></span><span class="pip-time rd">${runwayText(h)}</span></div>`; }).join(''); }
+  if(dec.length){ html+=`<div class="pip-sec">Unanchoring (${dec.length})</div>`;
+    html+=dec.map(s=>{ const cd=s.unanchorsAt?countdown(new Date(s.unanchorsAt).getTime()):null; return `<div class="pip-row dec"><span class="pip-name">${esc(s.name)||'Unnamed'}<div class="pip-sub">${esc(s.system||s.loc||'')}</div></span><span class="pip-time rd">${cd||'—'}</span></div>`; }).join(''); }
+  root.innerHTML=html;
+}
+async function togglePip(){
+  if(pipWin && !pipWin.closed){ pipWin.close(); pipWin=null; return; }
+  if(!('documentPictureInPicture' in window)){ toast('Picture-in-Picture needs a Chromium browser (Chrome/Edge).'); return; }
+  try{
+    pipWin=await documentPictureInPicture.requestWindow({width:320,height:480});
+    copyStylesTo(pipWin);
+    pipWin.document.body.classList.add('pip-body');
+    const root=pipWin.document.createElement('div'); root.id='pipRoot'; pipWin.document.body.appendChild(root);
+    pipWin.addEventListener('pagehide',()=>{ pipWin=null; const b=document.getElementById('pipBtn'); if(b) b.textContent='⧉ Pop out'; });
+    const b=document.getElementById('pipBtn'); if(b) b.textContent='⧉ Close pop-out';
+    renderPip();
+  }catch(e){ toast('Could not open pop-out: '+e.message); pipWin=null; }
+}
+window.togglePip=togglePip;
+setInterval(()=>{ if(pipWin && !pipWin.closed) renderPip(); }, 1000); // smooth live countdowns while popped out
 
 /* ---------- gate / auth view ---------- */
 function updateAuthView(){
